@@ -4,6 +4,12 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Grocery Intelligence — Household Dashboard</title>
+  <link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Grocery">
+<meta name="theme-color" content="#1c1c1c">
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
@@ -24,10 +30,50 @@
   .pill{ border:1px solid #d6d3d0; background:white; color:#525252; padding:.25rem .65rem; border-radius:.5rem; font-size:.75rem; line-height:1.25; transition: all .12s; }
   .pill:hover{ background:#f5f5f4; }
   .pill[data-active="true"]{ background:#1c1c1c; color:white; border-color:#1c1c1c; }
+  .qty-btn{ display:inline-flex; align-items:center; justify-content:center; width:1.25rem; height:1.25rem; border:1px solid #d6d3d0; background:white; color:#525252; border-radius:.25rem; font-size:.75rem; line-height:1; transition: all .12s; }
+  .qty-btn:hover:not(:disabled){ background:#f5f5f4; color:#1c1c1c; border-color:#a8a29e; }
+  .qty-btn:disabled{ opacity:.3; cursor:not-allowed; }
   .navtab{ font-size:.875rem; padding:.5rem .75rem; margin-bottom:-1px; border-bottom:2px solid transparent; color:#6b7280; transition: color .12s, border-color .12s; }
   .navtab[data-active="true"]{ color:#1c1c1c; border-bottom-color:#1c1c1c; font-weight:600; }
   .navtab:hover{ color:#1c1c1c; }
   textarea{ font-family: ui-monospace, monospace; }
+  /* Inline help tooltip — small ⓘ icon with hover/focus reveal */
+  .infotip{ position:relative; display:inline-flex; align-items:center; }
+  .infotip-trigger{
+    width:14px; height:14px; border-radius:999px;
+    background:#e7e5e0; color:#525252;
+    font-size:10px; line-height:14px; text-align:center;
+    cursor:help; user-select:none;
+    border:none; padding:0; margin-left:.25rem;
+    font-family: ui-sans-serif, system-ui, sans-serif; font-weight:600;
+  }
+  .infotip-trigger:hover, .infotip-trigger:focus{ background:#1c1c1c; color:white; outline:none; }
+  .infotip-bubble{
+    position:absolute; z-index:50; bottom:calc(100% + 6px); left:50%; transform:translateX(-50%);
+    width:max-content; max-width:260px;
+    background:#1c1c1c; color:white;
+    padding:.5rem .65rem; border-radius:.5rem;
+    font-size:.7rem; line-height:1.35; font-weight:400;
+    text-align:left; white-space:normal;
+    pointer-events:none; opacity:0; transition: opacity .15s;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  }
+  .infotip-bubble::after{
+    content:""; position:absolute; top:100%; left:50%; transform:translateX(-50%);
+    border:5px solid transparent; border-top-color:#1c1c1c;
+  }
+  .infotip:hover .infotip-bubble,
+  .infotip:focus-within .infotip-bubble{ opacity:1; }
+  /* Right-anchored variant for tips near the right edge */
+  .infotip-bubble.right{ left:auto; right:0; transform:none; }
+  .infotip-bubble.right::after{ left:auto; right:6px; transform:none; }
+  /* Help-banner card */
+  .help-banner{ background:linear-gradient(135deg, #f0f9ff 0%, #ecfdf5 100%); border:1px solid #bae6fd; }
+  .help-banner h2{ font-size:.95rem; font-weight:600; color:#0c4a6e; }
+  .legend-strip{ font-size:.7rem; color:#6b7280; }
+  .legend-strip .lkey{ display:inline-flex; align-items:center; gap:.3rem; margin-right:.9rem; white-space:nowrap; }
+  .legend-strip .lkey .sw{ width:8px; height:8px; border-radius:2px; display:inline-block; }
+  .tab-subtitle{ font-size:.75rem; color:#6b7280; margin-top:.5rem; margin-bottom:1rem; line-height:1.4; padding:0 .25rem; }
 </style>
 </head>
 <body>
@@ -44,9 +90,49 @@ const { useState, useMemo, useEffect, useCallback } = React;
 // (2) only apply changes not already listed, (3) append a new
 // entry below describing what they changed.
 // ============================================================
-const SITE_VERSION = "2026-05-13.2";
+const SITE_VERSION = "2026-05-13.6";
 const SITE_CHANGELOG = [
   // newest first
+  { version: "2026-05-13.6", date: "2026-05-13", changes: [
+    "Suggested next basket: every row now shows a suggested order quantity and pack size (e.g. '3× 520g').",
+    "Quantity is derived from your typical Tesco order history for that product family. Pack size is extracted from the most-common product name (weight/volume tokens like '520g', '1.5kg', '400ml', else '4 pack').",
+    "Prices now multiply correctly: unit price × suggested qty. The unit price is also shown beneath multi-pack rows ('@ £2.55/ea') so it's clear where the total comes from.",
+    "Leverage items default to 1 pack (try-before-bulk) regardless of historical order qty.",
+    "Internal: buildPriceIndex now computes per-unit medians (prefers explicit unit_price_gbp, falls back to total/qty), tracks typical purchase counts, and tracks most-common pack-size token per family.",
+  ]},
+  { version: "2026-05-13.5", date: "2026-05-13", changes: [
+    "Fixed tab subtitle layout: was overlapping the tab bar; now sits cleanly below with proper spacing.",
+    "Suggested next basket expanded: now combines three sources — pantry items expiring before the next delivery (~3-day buffer), top 20 likely gaps from order history, and top 12 high-leverage ingredients (filtered to those unlocking recipes or appearing in 3+ blocked dishes). Items already in pantry / covered by household rules are filtered out.",
+    "Basket section subtitle now breaks down counts by source (e.g. '3 expiring · 14 gaps · 8 leverage · est. ~£62.40').",
+    "Suggested delivery date now shows 'in Nd' next to the date for quick context.",
+    "All Planner sections (Expiring, Suggested next basket, Whole-household picks, High-protein, Quick wins, Leverage) now start collapsed for a cleaner first view.",
+    "Pantry tab: each row now has +/- buttons to adjust qty directly. Adjustments are stored locally and shown as '±N' next to the base qty. The 'Out of stock' action remains, plus hover-tooltips on item name (shows purchase date), expiry day-count (shows expiry date), and expiring-chip on Planner (shows expiry date) — all using the new date format.",
+    "Date format standardised across the app: 'Weekday DD Month' (e.g. 'Wed 13 May'), with the year shown only when the date falls in a later year. Applied to Orders tab, Gaps tab, Planner basket, cooked log, chart tooltips, and Pantry hover-tooltips.",
+  ]},
+  { version: "2026-05-13.4", date: "2026-05-13", changes: [
+    "Planner tab: new 'Suggested next basket' section combining likely gaps (regulars missing from latest delivery) with high-leverage ingredients (each unlocks several recipes).",
+    "Each basket row shows item, reason (gap or leverage with recipe count), and estimated price drawn from median past-Tesco prices. Fuzzy price matches marked with ~ and shown lighter.",
+    "Section header now estimates the basket total in pounds and counts priced vs unpriced items.",
+    "Added a 🚚 suggested delivery date callout, derived from the average gap between your last ~6 Tesco orders (clamped to no earlier than tomorrow).",
+    "Footnote clarifies that prices are estimates from past orders and may not reflect current Tesco pricing.",
+    "Gaps tab: removed the duplicated 'Order history' table — it already lives on the Orders tab.",
+    "Internal refactor: extracted shared helpers (buildPriceIndex, lookupPriceForIngredient, suggestNextDelivery, computeRegularsAndGaps) so Planner and Gaps share one gap-detection codepath.",
+  ]},
+  { version: "2026-05-13.3", date: "2026-05-13", changes: [
+    "Major usability pass: added a dismissible top help banner explaining what the dashboard is and how to use it.",
+    "Added inline info tooltips (ⓘ icons) on every confusing concept — confidence %, makeable %, leverage, audience tags, Khalil allergen, eater filter, expiry, never-restock rules, parse warnings.",
+    "Each tab now has a one-line subtitle below the nav explaining what that tab does (clarifies that Planner = what to cook this week, Recipes = browse/search the library, Pantry = current stock, Orders = past purchases, Gaps = ingredients to restock, Stats = library health).",
+    "Renamed 'Workflow audit' tab to 'Stats' — describes the content more accurately.",
+    "Added a colour/chip legend strip below the tab bar so users can decode the visual language at a glance.",
+    "Pantry tab: stat-card labels now have help icons; 'Khalil-allergen' explained; 'mark out' button renamed to 'Out of stock' with explanation.",
+    "Recipes tab: added intro line for the filter row explaining what each control does.",
+    "Planner tab: each section header now has a one-liner explaining the criteria used to populate it.",
+    "Orders tab: added top-of-page note clarifying this is read-only historical data, not editable in-app.",
+    "Gaps tab: tightened the 'What this view does' copy and made the comparison logic explicit; clarified what 'min orders' means.",
+    "Stats tab: each metric card now has a clearer hover tooltip explaining the figure.",
+    "Header subtitle now spells out what each number means rather than relying on dot-separated cryptic counts.",
+    "Export/Reset buttons gained tooltips.",
+  ]},
   { version: "2026-05-13.2", date: "2026-05-13", changes: [
     "Gaps tab restructured: the filter section (Likely real gaps / Restocked / Excluded / All regulars) is now nested inside the 'What this view does' section instead of sitting as a sibling. The Min orders selector lives at the top, then the filter pills + results table below a divider. Household never-restock rules now render inline as a callout when the Excluded filter is active.",
     "Gaps tab sections (What this view does + nested filter, Ingredients that unlock the most recipes, Order history) are now collapsible. Order history starts collapsed.",
@@ -199,6 +285,28 @@ function daysUntilExpiry(item){
   const d = new Date(item.expires + "T12:00:00Z");
   return Math.round((d - TODAY)/(1000*60*60*24));
 }
+// Format an ISO date string (YYYY-MM-DD) as "Weekday DD Month" (e.g. "Sat 16 May"),
+// adding the year only if it falls in a different year from TODAY.
+const WEEKDAY_SHORT = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+const MONTH_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function formatDate(iso){
+  if (!iso) return "";
+  const d = new Date(iso + "T12:00:00Z");
+  if (isNaN(d)) return iso;
+  const wd = WEEKDAY_SHORT[d.getUTCDay()];
+  const dd = d.getUTCDate();
+  const mon = MONTH_SHORT[d.getUTCMonth()];
+  const year = d.getUTCFullYear();
+  const thisYear = TODAY.getUTCFullYear();
+  const yearPart = year !== thisYear ? ` ${year}` : "";
+  return `${wd} ${dd} ${mon}${yearPart}`;
+}
+// Add N days to an ISO date and return the new ISO date.
+function addDays(iso, n){
+  const d = new Date(iso + "T12:00:00Z");
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
 
 // ===== Recipes =====
 function loadRecipes(){
@@ -310,6 +418,48 @@ function leverageScore(recipes, matchSet, limit){
 }
 
 // ===== UI =====
+function InfoTip({ children, align="center" }){
+  // children = the explanatory text. Renders a small ⓘ icon; reveals on hover/focus.
+  return <span className="infotip">
+    <button type="button" tabIndex={0} className="infotip-trigger" aria-label="More info">i</button>
+    <span className={"infotip-bubble"+(align==="right"?" right":"")} role="tooltip">{children}</span>
+  </span>;
+}
+function HelpBanner({ onDismiss }){
+  return <div className="help-banner rounded-xl p-4 mb-4">
+    <div className="flex items-start justify-between gap-3">
+      <div className="flex-1">
+        <h2>What is this dashboard?</h2>
+        <p className="text-sm text-stone-700 mt-1.5 leading-relaxed">
+          A read-mostly view of your household's groceries: what's in the pantry, what to cook this week, what you've bought from Tesco, and what's likely missing.
+          The data comes from a snapshot — Claude is the source of truth for edits. Anything you mark here (out-of-stock toggles, cooked log) stays in this browser only; paste those back into a Claude session to update the canonical state.
+        </p>
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-1.5 mt-3 text-xs text-stone-700">
+          <div><strong>Planner</strong> — what to cook this week, grouped by need.</div>
+          <div><strong>Recipes</strong> — search/filter the full library.</div>
+          <div><strong>Pantry</strong> — current stock + expiry + confidence.</div>
+          <div><strong>Orders</strong> — Tesco delivery history (read-only).</div>
+          <div><strong>Gaps</strong> — what regulars are missing from the pantry.</div>
+          <div><strong>Stats</strong> — library coverage + allergen audit.</div>
+        </div>
+      </div>
+      <button onClick={onDismiss} className="text-xs text-stone-500 hover:text-stone-800 underline shrink-0">dismiss</button>
+    </div>
+  </div>;
+}
+function LegendStrip(){
+  return <div className="legend-strip flex flex-wrap items-center mb-5 -mt-2">
+    <span className="mr-2 font-medium text-stone-600">Legend:</span>
+    <span className="lkey"><span className="sw" style={{background:"#16a34a"}}/>safe / good</span>
+    <span className="lkey"><span className="sw" style={{background:"#d97706"}}/>warn / check</span>
+    <span className="lkey"><span className="sw" style={{background:"#dc2626"}}/>blocked / overdue</span>
+    <span className="lkey"><span className="sw" style={{background:"#2563eb"}}/>info / adults-only</span>
+    <span className="lkey"><span className="sw" style={{background:"#7c3aed"}}/>accent / leverage</span>
+    <span className="lkey">✅ whole-household</span>
+    <span className="lkey">👨‍👩 adults only</span>
+    <span className="lkey">⚠️ check label</span>
+  </div>;
+}
 function Chip({tone="neutral", children, title}){
   const map = {
     neutral:"bg-stone-50 text-stone-700",
@@ -330,15 +480,18 @@ function Bar({pct, color}){
   const c = color || (pct>=70?"#16a34a":pct>=40?"#d97706":"#dc2626");
   return <div className="bar"><div style={{width:`${pct}%`, background:c}}/></div>;
 }
-function Stat({label, value, tone, sub}){
+function Stat({label, value, tone, sub, tip, tipAlign}){
   const tmap = { ok:"text-emerald-700", warn:"text-amber-700", danger:"text-red-700", info:"text-blue-700" };
   return <div className="card px-4 py-3">
-    <div className="text-xs text-stone-500 uppercase tracking-wider">{label}</div>
+    <div className="text-xs text-stone-500 uppercase tracking-wider flex items-center">
+      <span>{label}</span>
+      {tip && <InfoTip align={tipAlign}>{tip}</InfoTip>}
+    </div>
     <div className={`text-2xl font-semibold mt-0.5 ${tmap[tone]||""}`}>{value}</div>
     {sub && <div className="text-xs text-stone-500 mt-0.5">{sub}</div>}
   </div>;
 }
-function Section({title, subtitle, tone, children, collapsible=false, defaultOpen=true}){
+function Section({title, subtitle, tone, children, collapsible=false, defaultOpen=true, tip}){
   const map = { warn:"border-amber-200 bg-amber-50/40", ok:"border-emerald-200 bg-emerald-50/30", info:"border-blue-200 bg-blue-50/30", accent:"border-violet-200 bg-violet-50/30", neutral:"" };
   const [open, setOpen] = useState(defaultOpen);
   const isOpen = collapsible ? open : true;
@@ -354,7 +507,8 @@ function Section({title, subtitle, tone, children, collapsible=false, defaultOpe
     <div {...headerProps}>
       <h3 className="text-lg font-semibold flex items-center gap-2">
         {collapsible && <span className="text-stone-400 text-sm w-3 inline-block">{isOpen ? "▼" : "▶"}</span>}
-        {title}
+        <span>{title}</span>
+        {tip && <InfoTip>{tip}</InfoTip>}
       </h3>
       {subtitle && <span className="text-xs text-stone-500">{subtitle}</span>}
     </div>
@@ -363,15 +517,27 @@ function Section({title, subtitle, tone, children, collapsible=false, defaultOpe
 }
 
 // ===== Pantry view =====
-function PantryView({pantry, outOfStock, toggleOutOfStock}){
+function PantryView({pantry, outOfStock, toggleOutOfStock, qtyAdjustments, adjustQty}){
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState("all");
+  // Format qty string + integer delta into a display value. Tries to update the numeric
+  // portion of "500g" → "400g" when delta=-1 and step inferred… but step inference is
+  // ambiguous, so we instead show: base qty + " (±N)" indicator when delta is non-zero.
+  const renderQty = (baseQty, delta) => {
+    if (!delta) return <span>{baseQty}</span>;
+    const sign = delta > 0 ? "+" : "−";
+    return <span>
+      <span>{baseQty}</span>
+      <span className={delta > 0 ? "text-emerald-600 ml-1 text-[10px]" : "text-red-600 ml-1 text-[10px]"}>{sign}{Math.abs(delta)}</span>
+    </span>;
+  };
   const rows = useMemo(()=> pantry.map(p => {
     const conf = decayed(p);
     const dExp = daysUntilExpiry(p);
     const flag = p.allergen_flag || "household_safe";
-    return {...p, _conf:conf, _dExp:dExp, _flag:flag, _out: outOfStock.has(p.item)};
-  }), [pantry, outOfStock]);
+    const delta = qtyAdjustments[p.item] || 0;
+    return {...p, _conf:conf, _dExp:dExp, _flag:flag, _out: outOfStock.has(p.item), _delta: delta};
+  }), [pantry, outOfStock, qtyAdjustments]);
   const filtered = rows.filter(r => {
     if (q && !lc(r.item).includes(lc(q))) return false;
     if (filter==="expiring") return r._dExp!==null && r._dExp <= 5 && !r._out;
@@ -389,56 +555,66 @@ function PantryView({pantry, outOfStock, toggleOutOfStock}){
   };
   return <>
     <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
-      <Stat label="Items tracked" value={counts.total} />
-      <Stat label="Expiring ≤5d" value={counts.expiring} tone={counts.expiring>0?"warn":"ok"} />
-      <Stat label="Conf. <30%" value={counts.low} tone={counts.low>0?"warn":"ok"} />
-      <Stat label="Khalil-allergen" value={counts.son} tone="info" />
-      <Stat label="Marked out" value={counts.out} tone={counts.out>0?"danger":"ok"} />
+      <Stat label="Items tracked" value={counts.total}
+        tip="Every item currently known to be in your kitchen — fridge, freezer, cupboard. Comes from the embedded snapshot, not from live counting."/>
+      <Stat label="Expiring ≤5d" value={counts.expiring} tone={counts.expiring>0?"warn":"ok"}
+        tip="Items with an estimated expiry date within the next 5 days. Use the Planner tab to find recipes that use them."/>
+      <Stat label="Low confidence" value={counts.low} tone={counts.low>0?"warn":"ok"}
+        tip="Items with confidence under 30%. Confidence decays from 95% on purchase day based on category (fresh produce decays fast; dry goods decay slowly). Low confidence ≠ definitely gone — just less certain it's still usable."/>
+      <Stat label="Khalil-allergen" value={counts.son} tone="info"
+        tip="Items containing one of Khalil's allergens (dairy, eggs, wheat, lentils, peas, chickpeas, beans, avocado, beef, tree nuts) or marked as 'check label'. Tracked so meal planning excludes them when needed."/>
+      <Stat label="Marked out" value={counts.out} tone={counts.out>0?"danger":"ok"}
+        tipAlign="right"
+        tip="Items you've manually marked as out of stock in this browser. They're excluded from recipe matching and shown struck-through. Click 'Restore' on a row to undo."/>
     </div>
     <div className="flex flex-wrap gap-2 items-center mb-3">
-      <input className="border border-stone-300 rounded-lg px-3 py-1.5 text-sm flex-1 min-w-[160px]" placeholder="Search pantry…" value={q} onChange={e=>setQ(e.target.value)} />
+      <input className="border border-stone-300 rounded-lg px-3 py-1.5 text-sm flex-1 min-w-[160px]" placeholder="Search pantry by item name…" value={q} onChange={e=>setQ(e.target.value)} />
       <div className="flex flex-wrap gap-1">
-        {[["all","All"],["expiring","Expiring"],["low","Low conf"],["son","Khalil allergens"],["out","Marked out"]].map(([k,l])=>
+        {[["all","All"],["expiring","Expiring ≤5d"],["low","Low confidence"],["son","Khalil allergens"],["out","Marked out"]].map(([k,l])=>
           <button key={k} data-active={filter===k} onClick={()=>setFilter(k)} className="pill">{l}</button>
         )}
       </div>
     </div>
     <div className="card overflow-hidden">
       <div className="grid grid-cols-12 gap-2 text-xs text-stone-500 uppercase tracking-wider px-4 py-2 border-b border-stone-200 bg-stone-50">
-        <div className="col-span-4">Item</div>
+        <div className="col-span-3">Item</div>
         <div className="col-span-2">Category</div>
-        <div className="col-span-1 text-center">Qty</div>
-        <div className="col-span-2">Confidence</div>
+        <div className="col-span-2 text-center">Qty</div>
+        <div className="col-span-1 flex items-center">Conf <InfoTip>How likely the item is still usable. Starts at ~95% on purchase day and decays automatically by category. Anything below 30% is flagged 'low'.</InfoTip></div>
         <div className="col-span-1">Expires</div>
-        <div className="col-span-1 text-center">Khalil</div>
-        <div className="col-span-1 text-right">Actions</div>
+        <div className="col-span-1 text-center flex items-center justify-center">Khalil <InfoTip align="right">⚠️ = contains a Khalil allergen · ? = depends on the brand/label · ✓ = safe.</InfoTip></div>
+        <div className="col-span-2 text-right">Actions</div>
       </div>
       <div className="divide-y divide-stone-100">
         {filtered.map((r,i)=> (
           <div key={r.item+i} className={`grid grid-cols-12 gap-2 items-center px-4 py-2 text-sm ${r._out?"opacity-40 line-through":""}`}>
-            <div className="col-span-4 font-medium">{r.item}</div>
+            <div className="col-span-3 font-medium" title={r.purchased ? `bought ${formatDate(r.purchased)}` : ""}>{r.item}</div>
             <div className="col-span-2 text-stone-500 text-xs">{r.category}</div>
-            <div className="col-span-1 text-center mono text-xs">{r.qty}</div>
-            <div className="col-span-2"><Bar pct={r._conf}/><div className="mono text-[10px] text-stone-500 mt-0.5">{r._conf}%</div></div>
-            <div className="col-span-1 text-xs">
+            <div className="col-span-2 text-center mono text-xs flex items-center justify-center gap-1">
+              <button onClick={()=>adjustQty(r.item, -1)} disabled={r._out} className="qty-btn" title="Decrement qty (used one)">−</button>
+              <span className="min-w-[55px] inline-block">{renderQty(r.qty, r._delta)}</span>
+              <button onClick={()=>adjustQty(r.item, +1)} disabled={r._out} className="qty-btn" title="Increment qty (bought more)">+</button>
+            </div>
+            <div className="col-span-1"><Bar pct={r._conf}/><div className="mono text-[10px] text-stone-500 mt-0.5">{r._conf}%</div></div>
+            <div className="col-span-1 text-xs" title={r.expires ? `expires ${formatDate(r.expires)}` : ""}>
               {r._dExp===null ? <span className="text-stone-400">—</span>
                 : r._dExp <= 0 ? <span className="text-red-700 font-medium">overdue</span>
                 : r._dExp <= 5 ? <span className="text-amber-700 font-medium">{r._dExp}d</span>
                 : <span className="text-stone-500">{r._dExp}d</span>}
             </div>
             <div className="col-span-1 text-center">
-              {r._flag==="son_allergen" ? <Chip tone="danger">⚠️</Chip>
-                : r._flag==="check" ? <Chip tone="warn">?</Chip>
-                : <Chip tone="ok">✓</Chip>}
+              {r._flag==="son_allergen" ? <Chip tone="danger" title="Contains an ingredient Khalil cannot eat">⚠️</Chip>
+                : r._flag==="check" ? <Chip tone="warn" title="May contain a Khalil allergen — check the product label">?</Chip>
+                : <Chip tone="ok" title="Safe for Khalil">✓</Chip>}
             </div>
-            <div className="col-span-1 text-right">
-              <button onClick={()=>toggleOutOfStock(r.item)} className="text-[11px] text-stone-500 hover:text-red-700 underline">
-                {r._out ? "restore" : "mark out"}
+            <div className="col-span-2 text-right">
+              <button onClick={()=>toggleOutOfStock(r.item)} className="text-[11px] text-stone-500 hover:text-red-700 underline" title={r._out?"Restore this item to the pantry":"Mark this item as out of stock — it will be excluded from recipe matching"}>
+                {r._out ? "Restore" : "Out of stock"}
               </button>
             </div>
           </div>
         ))}
-        {!filtered.length && <div className="px-4 py-6 text-center text-sm text-stone-500">No items match.</div>}
+        {!filtered.length && <div className="px-4 py-6 text-center text-sm text-stone-500">No items match your filter.</div>}
       </div>
     </div>
   </>;
@@ -483,31 +659,39 @@ function RecipesView({pantry, outOfStock, cooked, addCooked, eaterFilter, setEat
 
   return <>
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
-      <Stat label="In library" value={RECIPES.length}/>
-      <Stat label="Whole-household safe" value={decorated.filter(r=>r._audience==="whole-household").length} tone="ok" />
-      <Stat label="Khalil can eat" value={decorated.filter(r=>r._flags.khalil!=="blocked").length} tone="ok" />
-      <Stat label="Cooked this session" value={cooked.length} tone="info"/>
+      <Stat label="In library" value={RECIPES.length}
+        tip="Total recipes across all sources (cookbooks, saved web recipes, Instagram saves)."/>
+      <Stat label="Whole-household safe" value={decorated.filter(r=>r._audience==="whole-household").length} tone="ok"
+        tip="Recipes everyone can eat — Max (pescatarian), Emily (no pork), and Khalil (allergens). These are the easiest to plan around."/>
+      <Stat label="Khalil can eat" value={decorated.filter(r=>r._flags.khalil!=="blocked").length} tone="ok"
+        tip="Recipes that don't contain any of Khalil's strict allergens. Some still need a label check (oats, soy sauce) — flagged ⚠️."/>
+      <Stat label="Cooked this session" value={cooked.length} tone="info"
+        tipAlign="right"
+        tip="Recipes you've marked as cooked in this browser. The list is in the Planner tab — paste it into a Claude session to update your canonical pantry."/>
+    </div>
+    <div className="text-xs text-stone-500 mb-2">
+      <strong>Filters:</strong> search by name, narrow by source/eater, sort the list, and use the slider to hide recipes you don't have enough ingredients for. Click any recipe row to see what's in your pantry vs missing, plus per-eater notes.
     </div>
     <div className="flex flex-wrap gap-2 mb-3 items-center">
-      <input className="border border-stone-300 rounded-lg px-3 py-1.5 text-sm flex-1 min-w-[160px]" placeholder="Search recipes…" value={q} onChange={e=>setQ(e.target.value)} />
-      <select className="border border-stone-300 rounded-lg px-2 py-1.5 text-sm" value={source} onChange={e=>setSource(e.target.value)}>
+      <input className="border border-stone-300 rounded-lg px-3 py-1.5 text-sm flex-1 min-w-[160px]" placeholder="Search recipes by name…" value={q} onChange={e=>setQ(e.target.value)} />
+      <select className="border border-stone-300 rounded-lg px-2 py-1.5 text-sm" value={source} onChange={e=>setSource(e.target.value)} title="Filter by which file the recipe came from">
         <option value="all">All sources</option>
         {sources.map(s=> <option key={s} value={s}>{s}</option>)}
       </select>
-      <select className="border border-stone-300 rounded-lg px-2 py-1.5 text-sm" value={sortBy} onChange={e=>setSortBy(e.target.value)}>
-        <option value="makeable">Sort: makeability</option>
-        <option value="protein">Sort: protein/serving</option>
-        <option value="time">Sort: total time</option>
-        <option value="name">Sort: name</option>
+      <select className="border border-stone-300 rounded-lg px-2 py-1.5 text-sm" value={sortBy} onChange={e=>setSortBy(e.target.value)} title="Change how the list is ordered">
+        <option value="makeable">Sort: makeability (highest first)</option>
+        <option value="protein">Sort: protein per serving</option>
+        <option value="time">Sort: total time (quickest first)</option>
+        <option value="name">Sort: name (A–Z)</option>
       </select>
-      <select className="border border-stone-300 rounded-lg px-2 py-1.5 text-sm" value={eaterFilter} onChange={e=>setEaterFilter(e.target.value)}>
+      <select className="border border-stone-300 rounded-lg px-2 py-1.5 text-sm" value={eaterFilter} onChange={e=>setEaterFilter(e.target.value)} title="Show only recipes safe for a specific eater">
         <option value="all">All eaters</option>
         <option value="khalil">Khalil-safe only</option>
         <option value="whole">Whole-household only</option>
         <option value="max">Max-safe (pescatarian)</option>
         <option value="emily">Emily-safe (no pork)</option>
       </select>
-      <label className="text-xs text-stone-600 flex items-center gap-1">
+      <label className="text-xs text-stone-600 flex items-center gap-1" title="Hide recipes where you don't already have at least this percentage of ingredients in your pantry">
         Min makeable {minMakeable}%
         <input type="range" min="0" max="100" step="10" value={minMakeable} onChange={e=>setMinMakeable(+e.target.value)} className="w-24"/>
       </label>
@@ -533,16 +717,16 @@ function RecipesView({pantry, outOfStock, cooked, addCooked, eaterFilter, setEat
               </span>
               <span className="text-xs text-stone-400 shrink-0 sm:hidden">{open?'▲':'▼'}</span>
             </div>
-            <Chip tone="neutral" title="Source">{sourceLabel}</Chip>
+            <Chip tone="neutral" title="Source — book + page, or website">{sourceLabel}</Chip>
             <AudienceTag a={r._audience}/>
-            {(r.protein_per_serving_g!=null) && <Chip tone={r.protein_per_serving_g>=45?"ok":r.protein_per_serving_g>=20?"info":"neutral"}>{r.protein_per_serving_g}g protein</Chip>}
-            {total>0 && <Chip tone={total<=20?"ok":total<=40?"neutral":"warn"}>{total}m total</Chip>}
-            <div className="flex items-center gap-2 min-w-[120px]">
+            {(r.protein_per_serving_g!=null) && <Chip tone={r.protein_per_serving_g>=45?"ok":r.protein_per_serving_g>=20?"info":"neutral"} title="Protein per serving — green ≥45g (Max training-day target), blue ≥20g, grey lower">{r.protein_per_serving_g}g protein</Chip>}
+            {total>0 && <Chip tone={total<=20?"ok":total<=40?"neutral":"warn"} title="Prep + cook time">{total}m total</Chip>}
+            <div className="flex items-center gap-2 min-w-[120px]" title={`You have ${r._make.pct}% of the ingredients for this recipe in your pantry`}>
               <div className="flex-1"><Bar pct={r._make.pct}/></div>
               <span className="mono text-xs">{r._make.pct}%</span>
             </div>
             <span className="text-xs text-stone-400 hidden sm:inline">{open?'▲':'▼'}</span>
-            <button onClick={(e)=>{ e.preventDefault(); e.stopPropagation(); addCooked(r); }} className="pill" data-active={wasCooked}>
+            <button onClick={(e)=>{ e.preventDefault(); e.stopPropagation(); addCooked(r); }} className="pill" data-active={wasCooked} title={wasCooked?"Click to un-mark as cooked":"Log that you cooked this — saved locally in this browser. Click again to undo."}>
               {wasCooked ? "✓ Cooked" : "Mark cooked"}
             </button>
           </div>
@@ -614,33 +798,194 @@ function PlannerView({pantry, outOfStock, cooked}){
   }).sort((a,b)=>b._make.pct-a._make.pct).slice(0,6);
   const leverage = useMemo(()=> leverageScore(decorated, matchSet, 12), [decorated, matchSet]);
 
+  // ===== Suggested next basket =====
+  const priceIndex = useMemo(()=> buildPriceIndex(), []);
+  const gapAnalysis = useMemo(()=> computeRegularsAndGaps(pantry, 3), [pantry]);
+  const nextDelivery = useMemo(()=> suggestNextDelivery(), []);
+
+  const basket = useMemo(()=>{
+    const items = [];
+    const seen = new Set(); // dedupe by lowercase canonical name
+
+    // Days until the suggested next delivery — items expiring within this window
+    // will need restocking by then.
+    const daysToDelivery = nextDelivery.date
+      ? Math.max(1, Math.round((new Date(nextDelivery.date + "T12:00:00Z") - TODAY)/(1000*60*60*24)))
+      : 7;
+    // Add a 2-day buffer so something expiring on delivery day still flags.
+    const expiryHorizon = daysToDelivery + 2;
+
+    // Helper: build a basket-item entry from a name + reason + optional pantry context.
+    // qtyHint: explicit suggested count (else falls back to typicalQty or 1).
+    const buildItem = (name, kind, why, whySub, qtyHint) => {
+      const priced = lookupPriceForIngredient(name, priceIndex);
+      const qty = qtyHint != null ? qtyHint : (priced && priced.typicalQty ? priced.typicalQty : 1);
+      const unitPrice = priced ? priced.unitGbp : null;
+      const totalPrice = unitPrice != null ? unitPrice * qty : null;
+      return {
+        kind, name, why, whySub,
+        qty, packSize: priced ? priced.packSize : null,
+        unitPrice, totalPrice,
+        priceSource: priced ? priced.source : null,
+      };
+    };
+
+    // 1) Pantry items expiring before the next delivery — likely needs restocking.
+    const expiryRestock = pantry
+      .filter(p => !outOfStock.has(p.item))
+      .map(p => ({ ...p, _dExp: daysUntilExpiry(p) }))
+      .filter(p => p._dExp !== null && p._dExp <= expiryHorizon && p._dExp >= -3)
+      .filter(p => !neverRestockReason(p.item))
+      .sort((a,b)=> a._dExp - b._dExp);
+    for (const p of expiryRestock) {
+      const key = lc(p.item);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const expiryDateStr = p.expires ? formatDate(p.expires) : null;
+      const why = p._dExp < 0
+        ? `expired ${Math.abs(p._dExp)}d ago — restock`
+        : p._dExp === 0
+          ? `expires today — restock`
+          : `expires in ${p._dExp}d (by delivery)`;
+      items.push(buildItem(p.item, "expiring", why, expiryDateStr ? `expiry: ${expiryDateStr}` : null));
+    }
+
+    // 2) Likely gaps (from order history) — high signal, you bought these regularly
+    const gapCandidates = (gapAnalysis?.gaps || []).slice(0, 20);
+    for (const g of gapCandidates) {
+      const key = lc(g.example);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const whySub = g.lastSeenDate ? `last: ${formatDate(g.lastSeenDate)}` : null;
+      items.push(buildItem(g.example, "gap", `bought in ${g.count} past orders`, whySub));
+    }
+
+    // 3) Top leverage ingredients — adding these unlocks the most blocked recipes
+    const leverageCandidates = (leverage || []).slice(0, 12);
+    for (const lv of leverageCandidates) {
+      const lvName = lv.ingredient || lv.item || "";
+      const key = lc(lvName);
+      if (!key || seen.has(key)) continue;
+      const inPantry = pantry.some(p => lc(p.item).includes(key) || key.includes(lc(p.item)));
+      if (inPantry && !outOfStock.has(lvName)) continue;
+      if (neverRestockReason(lvName)) continue;
+      seen.add(key);
+      const unlockCount = lv.unlockedTo70 || lv.unlocks || 0;
+      const mentionCount = lv.recipeCount || lv.mentions || 0;
+      if (unlockCount === 0 && mentionCount < 3) continue;
+      const whyText = unlockCount > 0
+        ? `unlocks ${unlockCount} recipe${unlockCount===1?"":"s"} (appears in ${mentionCount})`
+        : `appears in ${mentionCount} blocked recipes`;
+      // Leverage items: we want 1 pack typically (try-before-bulk), regardless of historical qty
+      items.push(buildItem(lvName, "leverage", whyText, null, 1));
+    }
+
+    const priced = items.filter(x => x.totalPrice != null);
+    const total = priced.reduce((s, x) => s + x.totalPrice, 0);
+    const unpriced = items.length - priced.length;
+    const counts = {
+      expiring: items.filter(x => x.kind === "expiring").length,
+      gap: items.filter(x => x.kind === "gap").length,
+      leverage: items.filter(x => x.kind === "leverage").length,
+    };
+    return { items, total, priced: priced.length, unpriced, counts, daysToDelivery };
+  }, [gapAnalysis, leverage, pantry, outOfStock, priceIndex, nextDelivery]);
+
   return <div className="space-y-6">
-    {expiring.length>0 && <Section title="Use these first — expiring ≤5 days" tone="warn" collapsible>
+    {expiring.length>0 && <Section title="Use these first — expiring ≤5 days" tone="warn" collapsible defaultOpen={false}
+      tip="Pantry items estimated to expire within 5 days, sorted by urgency. The recipes below are ones that use at least one of these items.">
       <div className="flex flex-wrap gap-2">
-        {expiring.map((e,i)=> <Chip key={i} tone={e._dExp<=2?"danger":"warn"}>{e.item} · {e._dExp}d</Chip>)}
+        {expiring.map((e,i)=> <Chip key={i} tone={e._dExp<=2?"danger":"warn"} title={e.expires ? `expires ${formatDate(e.expires)}` : ""}>{e.item} · {e._dExp}d</Chip>)}
       </div>
       {usesExpiring.length>0 && <>
-        <div className="text-xs text-stone-500 mt-3 mb-2 uppercase tracking-wider">Recipes using them</div>
+        <div className="text-xs text-stone-500 mt-3 mb-2 uppercase tracking-wider">Recipes that use these expiring items</div>
         <RecipeMicroList items={usesExpiring}/>
       </>}
     </Section>}
-    <Section title={`Whole-household picks · ${wholeHousehold.length}`} tone="ok" subtitle="Safe for all three including Khalil, sorted by how much you already have" collapsible>
+
+    {basket.items.length > 0 && <Section title={`Suggested next basket · ${basket.items.length} items`}
+      subtitle={basket.priced > 0
+        ? `${basket.counts.expiring} expiring · ${basket.counts.gap} gaps · ${basket.counts.leverage} leverage · est. ~£${basket.total.toFixed(2)}${basket.unpriced>0?` (${basket.unpriced} unpriced)`:""}`
+        : "Prices not available — no matches in order history"}
+      tone="accent" collapsible defaultOpen={false}
+      tip="Combines (1) pantry items expiring before the next delivery, (2) likely gaps from order history, and (3) high-leverage ingredients (each unlocks several recipes). Prices are medians from your past Tesco orders.">
+      {nextDelivery.date && <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-3 text-sm flex items-start gap-2">
+        <span className="text-base">🚚</span>
+        <div className="flex-1">
+          <div><strong>Suggested delivery: {formatDate(nextDelivery.date)}</strong> <span className="text-xs text-stone-500">· in {basket.daysToDelivery}d</span></div>
+          <div className="text-xs text-stone-600 mt-0.5">{nextDelivery.note}</div>
+        </div>
+      </div>}
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead><tr className="text-stone-500 text-xs uppercase tracking-wider">
+            <th className="text-left py-1.5 pr-2">Item</th>
+            <th className="text-left py-1.5 pr-2">Qty</th>
+            <th className="text-left py-1.5 pr-2">Why</th>
+            <th className="text-right py-1.5">Est. price</th>
+          </tr></thead>
+          <tbody>{basket.items.map((b, i) => {
+            const chipTone = b.kind === "expiring" ? "danger" : b.kind === "gap" ? "warn" : "info";
+            const chipLabel = b.kind === "expiring" ? "expiring" : b.kind === "gap" ? "gap" : "leverage";
+            const qtyLabel = b.qty > 1 ? `${b.qty}×` : "1×";
+            const sizeLabel = b.packSize || "pack";
+            return <tr key={i} className="border-t border-stone-100 align-top">
+              <td className="py-2 pr-2">
+                <div className="font-medium leading-tight">{b.name}</div>
+                <Chip tone={chipTone}>{chipLabel}</Chip>
+              </td>
+              <td className="py-2 pr-2">
+                <div className="mono whitespace-nowrap">{qtyLabel} {sizeLabel}</div>
+                {b.unitPrice != null && b.qty > 1 && <div className="text-[10px] text-stone-500 mono mt-0.5">@ £{b.unitPrice.toFixed(2)}/ea</div>}
+              </td>
+              <td className="py-2 pr-2 text-stone-700">
+                <div>{b.why}</div>
+                {b.whySub && <div className="text-xs text-stone-500 mt-0.5">{b.whySub}</div>}
+              </td>
+              <td className="py-2 text-right mono">
+                {b.totalPrice != null
+                  ? <span className={b.priceSource === "fuzzy" ? "text-stone-500" : ""}>
+                      {b.priceSource === "fuzzy" ? "~" : ""}£{b.totalPrice.toFixed(2)}
+                    </span>
+                  : <span className="text-stone-400">—</span>}
+              </td>
+            </tr>;
+          })}</tbody>
+          {basket.priced > 0 && <tfoot>
+            <tr className="border-t-2 border-stone-300 font-semibold">
+              <td className="py-2 pr-2" colSpan="3">Estimated total ({basket.priced} priced)</td>
+              <td className="py-2 text-right mono">£{basket.total.toFixed(2)}</td>
+            </tr>
+          </tfoot>}
+        </table>
+      </div>
+      <div className="text-xs text-stone-500 mt-3 leading-relaxed">
+        Quantities and pack sizes are based on what you typically order for this product. Prices are medians from your past Tesco orders and may not reflect current Tesco pricing. Fuzzy matches are marked with <span className="mono">~</span> and shown in lighter text. Unpriced items (<span className="mono">—</span>) had no match in order history. Suggested delivery is calculated from your past order cadence.
+      </div>
+    </Section>}
+
+    <Section title={`Whole-household picks · ${wholeHousehold.length}`} tone="ok" subtitle="Top 6 by makeability — recipes you mostly already have ingredients for" collapsible defaultOpen={false}
+      tip="Recipes safe for everyone (Max, Emily, and Khalil), ranked by how much of the ingredient list you already have in the pantry.">
       <RecipeMicroList items={wholeHousehold}/>
     </Section>
-    <Section title="High-protein options for Max (≥30g)" tone="info" subtitle="Pescatarian-safe, higher-protein dishes for training days" collapsible>
+    <Section title="High-protein options for Max (≥30g)" tone="info" subtitle="Top 6 by protein per serving — pescatarian-safe" collapsible defaultOpen={false}
+      tip="Recipes Max can eat (no meat) that hit at least 30g protein per serving — useful for training days. Sorted by protein content, highest first.">
       <RecipeMicroList items={highProteinAdult}/>
     </Section>
-    <Section title="Quick wins ≤25 min" tone="accent" subtitle="At least 50% in-pantry and short total time" collapsible>
+    <Section title="Quick wins ≤25 min" tone="accent" subtitle="At least 50% in-pantry and short total time" collapsible defaultOpen={false}
+      tip="Fast meals (prep + cook ≤25 min) where you already have at least half the ingredients. Good for weeknight 'what can I make tonight'.">
       <RecipeMicroList items={quickMakeable}/>
     </Section>
-    <Section title="Unlock the most recipes" tone="info" subtitle="Adding one of these flips the most blocked recipes to ≥70% makeable. Click any tile to see which recipes." collapsible>
+    <Section title="Unlock the most recipes" tone="info" subtitle="One ingredient → many newly-makeable meals" collapsible defaultOpen={false}
+      tip="Each row is one ingredient that, if added to your pantry, would push the most recipes over the 70% makeable threshold. Click a row to see exactly which recipes it unlocks. Khalil-blocked recipes are excluded from the ranking.">
       <LeverageTileGrid items={leverage}/>
     </Section>
-    {cooked.length > 0 && <Section title={`Cooked log · ${cooked.length}`} tone="neutral" subtitle="Saved to local storage on this device" collapsible defaultOpen={false}>
+    {cooked.length > 0 && <Section title={`Cooked log · ${cooked.length}`} tone="neutral" subtitle="Saved to local storage on this device" collapsible defaultOpen={false}
+      tip="Recipes you've marked cooked via the Recipes tab. This log lives only in this browser — paste it into a Claude session so it can update your canonical pantry quantities.">
       <ul className="text-sm space-y-1">
         {cooked.slice().reverse().map((c,i)=> <li key={i} className="flex justify-between border-b border-stone-100 py-1">
           <span>{c.name}</span>
-          <span className="text-xs text-stone-500 mono">{c.date}</span>
+          <span className="text-xs text-stone-500 mono">{formatDate(c.date)}</span>
         </li>)}
       </ul>
     </Section>}
@@ -715,9 +1060,9 @@ function LeverageTileGrid({items}){
     <div className="px-3 py-2 border-b border-stone-200 bg-stone-50 text-[11px] uppercase tracking-wider text-stone-500 grid grid-cols-12 gap-2">
       <div className="col-span-1 text-right">#</div>
       <div className="col-span-5">Ingredient</div>
-      <div className="col-span-2 text-right">Recipes</div>
-      <div className="col-span-2 text-right">Avg boost</div>
-      <div className="col-span-1 text-right" title="Recipes pushed to ≥70% makeable">→70%</div>
+      <div className="col-span-2 text-right" title="How many recipes in the library use this ingredient">Recipes</div>
+      <div className="col-span-2 text-right" title="Average makeability % boost across affected recipes if you added this ingredient">Avg boost</div>
+      <div className="col-span-1 text-right" title="How many recipes are pushed to ≥70% makeable if you add just this one ingredient">→70%</div>
       <div className="col-span-1"/>
     </div>
     <div className="divide-y divide-stone-100">
@@ -767,7 +1112,7 @@ function SpendChart({orders}){
         const y = h - bh;
         return <g key={i}>
           <rect x={x} y={y} width={bw} height={bh} fill="#0f766e" opacity="0.85">
-            <title>{`${o.delivery_date}: £${v.toFixed(2)} · ${o.purchased_count||o.item_count||0} items`}</title>
+            <title>{`${formatDate(o.delivery_date)}: £${v.toFixed(2)} · ${o.purchased_count||o.item_count||0} items`}</title>
           </rect>
           <text x={x+bw/2} y={y-3} textAnchor="middle" fontSize="9" fill="#44403c">£{Math.round(v)}</text>
           <text x={x+bw/2} y={h+12} textAnchor="middle" fontSize="8" fill="#a8a29e">{(o.delivery_date||"").slice(5)}</text>
@@ -879,21 +1224,28 @@ function OrdersView(){
   const maxSection = Math.max(...stats.sectionTotals.map(([,v])=>v), 1);
 
   return <div className="space-y-5">
+    <div className="text-xs text-stone-600 bg-stone-50 border border-stone-200 rounded-lg px-3 py-2">
+      <strong>Read-only history.</strong> {orders.length} Tesco orders parsed from receipt emails between {formatDate(orders[0].delivery_date)} and {formatDate(orders[orders.length-1].delivery_date)}.
+      Useful for spotting patterns (what you buy regularly), tracking Khalil's allergen exposure across past deliveries, and reviewing substitutions.
+      This tab can't be edited in-app — receipts are added in a Claude session.
+    </div>
     <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
-      <KV label="Orders" value={orders.length} sub={`from ${orders[0].delivery_date} to ${orders[orders.length-1].delivery_date}`}/>
-      <KV label="Total spend" value={`£${stats.totalSpend.toFixed(0)}`}/>
-      <KV label="Avg order" value={`£${stats.avgSpend.toFixed(0)}`}/>
-      <KV label="Items bought" value={stats.totalItems}/>
-      <KV label="Savings" value={`£${stats.totalSaved.toFixed(0)}`}/>
-      <KV label="Substitutions" value={stats.totalSubs}/>
-      <KV label="Unavailable" value={stats.totalUnavail}/>
+      <KV label="Orders" value={orders.length} sub={`${formatDate(orders[0].delivery_date)} → ${formatDate(orders[orders.length-1].delivery_date)}`}/>
+      <KV label="Total spend" value={`£${stats.totalSpend.toFixed(0)}`} sub="Across all orders"/>
+      <KV label="Avg order" value={`£${stats.avgSpend.toFixed(0)}`} sub="Per delivery"/>
+      <KV label="Items bought" value={stats.totalItems} sub="Excludes unavailable"/>
+      <KV label="Savings" value={`£${stats.totalSaved.toFixed(0)}`} sub="Clubcard / deals"/>
+      <KV label="Substitutions" value={stats.totalSubs} sub="Items swapped by Tesco"/>
+      <KV label="Unavailable" value={stats.totalUnavail} sub="Ordered, not delivered"/>
     </div>
 
-    <Section title="Spend over time" subtitle="Order totals, oldest → newest" tone="info">
+    <Section title="Spend over time" subtitle="Order totals, oldest → newest" tone="info"
+      tip="Each bar is one delivery. Useful for spotting big top-up shops vs. regular weekly shops.">
       <SpendChart orders={orders}/>
     </Section>
 
-    <Section title={`Order history · ${orders.length} orders`} subtitle="Click any order to see line items, substitutions, and unavailable items">
+    <Section title={`Order history · ${orders.length} orders`} subtitle="Click any order to see line items, substitutions, and unavailable items"
+      tip="Every parsed Tesco delivery. Each row shows item count, substitutions (sub), unavailable items, Khalil-allergen exposure (⚠️), and total. Click to expand into the full receipt.">
       <div className="space-y-1.5">
         {orders.slice().reverse().map(o => {
           const open = expanded === o.order_number;
@@ -903,15 +1255,15 @@ function OrdersView(){
                  onClick={(e)=>{ if(e.target.closest('button,a')) return; setExpanded(open?null:o.order_number); }}
                  onKeyDown={(e)=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); setExpanded(open?null:o.order_number);} }}
                  className="px-3 py-2 flex items-center gap-2 flex-wrap text-sm cursor-pointer select-none">
-              <span className="mono text-xs text-stone-500 w-20 shrink-0">{o.delivery_date}</span>
-              <Chip>#{o.order_number}</Chip>
-              {o.email_type && <Chip tone="neutral">{o.email_type}</Chip>}
+              <span className="mono text-xs text-stone-500 w-28 shrink-0">{formatDate(o.delivery_date)}</span>
+              <Chip title="Tesco order number">#{o.order_number}</Chip>
+              {o.email_type && <Chip tone="neutral" title="Email type: receipt = post-delivery, confirmation = at-order, amendment = changed before delivery">{o.email_type}</Chip>}
               <span className="flex-1 min-w-[20px]"/>
-              <Chip>{o.purchased_count||o.item_count||0} items</Chip>
-              {o.substitution_count>0 && <Chip tone="warn">{o.substitution_count} sub</Chip>}
-              {o.unavailable_count>0 && <Chip tone="danger">{o.unavailable_count} unavail</Chip>}
-              {allergenLines>0 && <Chip tone="warn">⚠️ {allergenLines}</Chip>}
-              <Chip tone="accent">£{(o.total_paid_gbp||0).toFixed(2)}</Chip>
+              <Chip title="Items actually delivered">{o.purchased_count||o.item_count||0} items</Chip>
+              {o.substitution_count>0 && <Chip tone="warn" title="Items Tesco swapped in">{o.substitution_count} sub</Chip>}
+              {o.unavailable_count>0 && <Chip tone="danger" title="Items ordered but not delivered">{o.unavailable_count} unavail</Chip>}
+              {allergenLines>0 && <Chip tone="warn" title={`${allergenLines} delivered items contain a Khalil allergen`}>⚠️ {allergenLines}</Chip>}
+              <Chip tone="accent" title="Total paid for this order">£{(o.total_paid_gbp||0).toFixed(2)}</Chip>
               <span className="text-xs text-stone-400">{open?'▲':'▼'}</span>
             </div>
             {open && <div className="px-3 pb-3 text-xs border-t border-stone-100 pt-2">
@@ -939,7 +1291,8 @@ function OrdersView(){
       </div>
     </Section>
 
-    <Section title="Spend by aisle" subtitle="Categorised by Tesco's order-page section">
+    <Section title="Spend by aisle" subtitle="Categorised by Tesco's order-page section"
+      tip="Where the money goes. Aisle labels come straight from Tesco — 'cupboard' tends to dominate because it's a catch-all for non-fridge, non-freezer items.">
       <div className="space-y-1.5">
         {stats.sectionTotals.map(([sec, v]) => <div key={sec} className="flex items-center gap-3">
           <div className="w-28 text-sm shrink-0">{sec}</div>
@@ -951,36 +1304,39 @@ function OrdersView(){
       </div>
     </Section>
 
-    <Section title="Repeat-purchase patterns" subtitle={`${stats.trends.filter(t=>t.count>=2).length} items bought across 2+ orders`}>
+    <Section title="Repeat-purchase patterns" subtitle={`${stats.trends.filter(t=>t.count>=2).length} items bought across 2+ orders`}
+      tip="Items appearing in 2+ orders, sorted by order count then by total spend. Useful for identifying reliable staples to keep on auto-add.">
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
         {stats.trends.filter(t=>t.count>=2).slice(0,30).map((t,i)=> <div key={i} className="card px-2.5 py-1.5 flex items-center justify-between text-xs gap-2">
           <span className="truncate flex-1">{t.name}</span>
           <div className="flex items-center gap-1 shrink-0">
-            {t.allergen && <Chip tone="warn">{t.allergen}</Chip>}
-            <Chip>×{t.count}</Chip>
-            <Chip tone="accent">£{t.spend.toFixed(0)}</Chip>
+            {t.allergen && <Chip tone="warn" title={`Contains ${t.allergen} — Khalil cannot eat`}>{t.allergen}</Chip>}
+            <Chip title="Number of orders this item appeared in">×{t.count}</Chip>
+            <Chip tone="accent" title="Cumulative spend across all orders">£{t.spend.toFixed(0)}</Chip>
           </div>
         </div>)}
       </div>
     </Section>
 
-    {stats.khalilExposure.length>0 && <Section title="Khalil allergen exposure" subtitle={`${stats.khalilExposure.length} distinct items containing his allergens have been ordered`} tone="warn">
+    {stats.khalilExposure.length>0 && <Section title="Khalil allergen exposure" subtitle={`${stats.khalilExposure.length} distinct items containing his allergens have been ordered`} tone="warn"
+      tip="Items bought historically that Khalil can't eat. Not a problem in itself (these are for the adults), but useful context — anything frequently re-purchased may worth replacing with a Khalil-safe alternative.">
       <div className="grid sm:grid-cols-2 gap-1.5 text-xs">
         {stats.khalilExposure.slice(0,40).map((t,i)=> <div key={i} className="card px-2.5 py-1.5 flex items-center justify-between gap-2">
           <span className="truncate flex-1">{t.name}</span>
           <div className="flex items-center gap-1 shrink-0">
             <Chip tone="warn">{t.allergen}</Chip>
-            <Chip>×{t.count}</Chip>
-            <span className="text-stone-500 mono">{t.lastDate}</span>
+            <Chip title="Number of orders">×{t.count}</Chip>
+            <span className="text-stone-500 mono" title="Most recent order date">{t.lastDate}</span>
           </div>
         </div>)}
       </div>
     </Section>}
 
-    {stats.subs.length>0 && <Section title={`Substitutions · ${stats.subs.length}`} subtitle="Items Tesco swapped in">
+    {stats.subs.length>0 && <Section title={`Substitutions · ${stats.subs.length}`} subtitle="Items Tesco swapped in"
+      tip="When Tesco runs out of what you ordered, they swap in a similar item. Worth scanning for repeat substitutions — it usually means the original product needs replacing in your usual basket.">
       <div className="space-y-1 text-xs">
         {stats.subs.slice(0,20).map((s,i)=> <div key={i} className="card px-2.5 py-1.5 flex flex-wrap items-center gap-2">
-          <span className="mono text-stone-500 w-20 shrink-0">{s.delivery_date}</span>
+          <span className="mono text-stone-500 w-28 shrink-0">{formatDate(s.delivery_date)}</span>
           <span className="text-stone-700">{s.substituted_for}</span>
           <span className="text-stone-400">→</span>
           <span className="font-medium">{s.name}</span>
@@ -988,16 +1344,18 @@ function OrdersView(){
       </div>
     </Section>}
 
-    {stats.unavails.length>0 && <Section title={`Unavailable items · ${stats.unavails.length}`} subtitle="Items ordered but not delivered">
+    {stats.unavails.length>0 && <Section title={`Unavailable items · ${stats.unavails.length}`} subtitle="Items ordered but not delivered"
+      tip="Things you tried to order that Tesco couldn't fulfil and had no substitute for. Recurring entries usually mean a product is being phased out — worth finding an alternative.">
       <div className="space-y-1 text-xs">
         {stats.unavails.slice(0,20).map((u,i)=> <div key={i} className="card px-2.5 py-1.5 flex flex-wrap items-center gap-2">
-          <span className="mono text-stone-500 w-20 shrink-0">{u.delivery_date}</span>
+          <span className="mono text-stone-500 w-28 shrink-0">{formatDate(u.delivery_date)}</span>
           <span>{u.name}</span>
         </div>)}
       </div>
     </Section>}
 
-    {stats.warnings.length>0 && <Section title={`Parse warnings · ${stats.warnings.length}`} subtitle="Orders where parsing flagged something" tone="warn">
+    {stats.warnings.length>0 && <Section title={`Parse warnings · ${stats.warnings.length}`} subtitle="Orders where parsing flagged something" tone="warn"
+      tip="Receipts where the parser noticed something odd — usually a truncated email body where line items didn't add up to the order total. Treat these orders' line-item lists as incomplete.">
       <div className="space-y-1 text-xs">
         {stats.warnings.map((w,i)=> <div key={i} className="card px-2.5 py-1.5">
           <span className="mono text-stone-500 mr-2">#{w.order_number}</span> {w.parse_warning}
@@ -1334,6 +1692,175 @@ function neverRestockReason(name){
   return null;
 }
 
+// ===== Basket suggestion: shared logic across Planner & Gaps =====
+//
+// Build a price index from Tesco order history. For each normalised product family,
+// collect all (purchased, priced) instances and take the median total price as the
+// expected per-pack price.
+// Extract a pack size string from a product name (e.g. "Tesco Boneless Salmon Fillets 4 Pack 520g" → "520g").
+// Returns the most specific size token found, or null.
+function extractPackSize(name){
+  if (!name) return null;
+  const n = String(name);
+  // Prefer weight/volume tokens (e.g. "520g", "1.5kg", "400ml", "1L"). Case-insensitive, allows decimals.
+  const wt = n.match(/(\d+(?:\.\d+)?)\s*(g|kg|ml|l|cl)\b/i);
+  if (wt) return `${wt[1]}${wt[2].toLowerCase()}`;
+  // Pack-count tokens (e.g. "4 Pack", "6 Pack", "2X76g" already caught above).
+  const pk = n.match(/(\d+)\s*(?:pack|x|each)\b/i);
+  if (pk) return `${pk[1]} pack`;
+  return null;
+}
+
+function buildPriceIndex(){
+  const byFamily = new Map(); // family-key -> { unitPrices:[], orderQtys:[], sizes:Map<size,count> }
+  for (const o of TESCO_ORDERS) {
+    for (const it of (o.items||[])) {
+      if (it.status === "unavailable") continue;
+      const k = normaliseProductName(it.name);
+      if (!k) continue;
+      if (!byFamily.has(k)) byFamily.set(k, { unitPrices: [], orderQtys: [], sizes: new Map() });
+      const entry = byFamily.get(k);
+      // Compute per-unit price: prefer the explicit unit_price_gbp, fall back to total / qty.
+      const qty = (it.qty != null && it.qty > 0) ? it.qty : 1;
+      let unitPrice = null;
+      if (it.unit_price_gbp != null) unitPrice = it.unit_price_gbp;
+      else if (it.total_price_gbp != null) unitPrice = it.total_price_gbp / qty;
+      if (unitPrice != null) entry.unitPrices.push(unitPrice);
+      if (it.qty != null && it.qty > 0) entry.orderQtys.push(it.qty);
+      const size = extractPackSize(it.name);
+      if (size) entry.sizes.set(size, (entry.sizes.get(size) || 0) + 1);
+    }
+  }
+  const familyMedians = new Map();
+  for (const [k, v] of byFamily) {
+    if (!v.unitPrices.length) continue;
+    const sortedPrices = v.unitPrices.slice().sort((a,b)=> a-b);
+    const unitMedian = sortedPrices[Math.floor(sortedPrices.length/2)];
+    // Typical qty: median qty across orders where this family was bought.
+    let typicalQty = 1;
+    if (v.orderQtys.length) {
+      const sortedQtys = v.orderQtys.slice().sort((a,b)=> a-b);
+      typicalQty = sortedQtys[Math.floor(sortedQtys.length/2)] || 1;
+    }
+    // Most-common size token
+    let topSize = null, topSizeCount = 0;
+    for (const [size, n] of v.sizes) if (n > topSizeCount) { topSize = size; topSizeCount = n; }
+    familyMedians.set(k, { unitMedian, sample: v.unitPrices.length, typicalQty, packSize: topSize });
+  }
+  return familyMedians;
+}
+
+// Loose lookup: given a free-form ingredient name (from a recipe), try to find a
+// matching Tesco family price. Returns { unitGbp, totalGbp, packSize, typicalQty, source, matchedFamily } or null.
+function lookupPriceForIngredient(name, priceIndex){
+  if (!name) return null;
+  const n = lc(name);
+  const wrap = (info, family, source) => ({
+    unitGbp: info.unitMedian,
+    totalGbp: info.unitMedian * info.typicalQty,
+    packSize: info.packSize,
+    typicalQty: info.typicalQty,
+    matchedFamily: family,
+    source,
+  });
+  // 1) Direct family-key match
+  const direct = normaliseProductName(name);
+  if (direct && priceIndex.has(direct)) {
+    return wrap(priceIndex.get(direct), direct, "direct");
+  }
+  // 2) Substring match against family keys (best-fit by length of overlap)
+  let best = null;
+  for (const [fam, info] of priceIndex) {
+    if (n.includes(fam) || fam.includes(n)) {
+      const overlap = Math.min(n.length, fam.length);
+      if (!best || overlap > best.overlap) best = { fam, info, overlap };
+    }
+  }
+  if (best) return wrap(best.info, best.fam, "fuzzy");
+  return null;
+}
+
+// Compute the suggested delivery date from past order cadence.
+// Returns { date: "YYYY-MM-DD", note: "..." }
+function suggestNextDelivery(){
+  if (TESCO_ORDERS.length < 2) {
+    return { date: null, note: "Not enough order history to estimate cadence." };
+  }
+  // Average gap in days between consecutive deliveries (use last ~6 to weight recent behaviour)
+  const recent = TESCO_ORDERS.slice(-6);
+  const gaps = [];
+  for (let i = 1; i < recent.length; i++) {
+    const a = new Date(recent[i-1].delivery_date + "T12:00:00Z");
+    const b = new Date(recent[i].delivery_date + "T12:00:00Z");
+    const d = Math.round((b - a) / (24*60*60*1000));
+    if (d > 0 && d < 60) gaps.push(d);
+  }
+  if (!gaps.length) return { date: null, note: "Order cadence is too irregular to estimate." };
+  const avgGap = Math.round(gaps.reduce((s,n)=>s+n, 0) / gaps.length);
+  const latest = TESCO_ORDERS[TESCO_ORDERS.length - 1].delivery_date;
+  const latestDate = new Date(latest + "T12:00:00Z");
+  const proposedDate = new Date(latestDate.getTime() + avgGap * 24*60*60*1000);
+  // Never propose a date earlier than tomorrow
+  const tomorrow = new Date(TODAY.getTime() + 24*60*60*1000);
+  const finalDate = proposedDate < tomorrow ? tomorrow : proposedDate;
+  const iso = finalDate.toISOString().slice(0, 10);
+  const weekday = finalDate.toUTCString().slice(0, 3);
+  return {
+    date: iso,
+    weekday,
+    note: `Based on a ${avgGap}-day average across your last ${recent.length} deliveries (latest: ${latest}).`,
+    avgGap,
+  };
+}
+
+// Re-runs the Gaps tab's regulars-vs-pantry analysis. Returns null if no orders.
+function computeRegularsAndGaps(pantry, minOrders=3){
+  if (!TESCO_ORDERS.length) return null;
+  const latestIdx = TESCO_ORDERS.length - 1;
+
+  const fam = new Map();
+  TESCO_ORDERS.forEach((o, i) => {
+    (o.items||[]).forEach(it => {
+      if (it.status === "unavailable") return;
+      const k = normaliseProductName(it.name);
+      if (!k) return;
+      if (!fam.has(k)) fam.set(k, { example: it.name, orderIdxs: new Set(), lastSeenDate: o.delivery_date, counts: new Map() });
+      const entry = fam.get(k);
+      entry.orderIdxs.add(i);
+      if ((o.delivery_date||"") > (entry.lastSeenDate||"")) entry.lastSeenDate = o.delivery_date;
+      entry.counts.set(it.name, (entry.counts.get(it.name)||0) + 1);
+    });
+  });
+  for (const v of fam.values()) {
+    let best = null, bestN = -1;
+    for (const [n, c] of v.counts) if (c > bestN) { best = n; bestN = c; }
+    v.example = best;
+    delete v.counts;
+  }
+
+  const pantryKeys = new Set(pantry.map(p => p.item.toLowerCase()));
+  const regulars = [];
+  for (const [key, v] of fam) {
+    const count = v.orderIdxs.size;
+    if (count < minOrders) continue;
+    const inLatest = v.orderIdxs.has(latestIdx);
+    let pantryItem = null;
+    for (const pk of pantryKeys) {
+      if (key.includes(pk) || (v.example||"").toLowerCase().includes(pk)) { pantryItem = pk; break; }
+    }
+    if (!pantryItem) pantryItem = findPantryMatch(v.example);
+    const allergen = khalilAllergenFlag(v.example);
+    const excluded = neverRestockReason(v.example);
+    regulars.push({
+      key, example: v.example, count, inLatest, lastSeenDate: v.lastSeenDate,
+      pantryItem, allergen, excludedReason: excluded,
+    });
+  }
+  regulars.sort((a,b)=> b.count - a.count || (a.lastSeenDate||"").localeCompare(b.lastSeenDate||""));
+  const gaps = regulars.filter(r => !r.pantryItem && !r.inLatest && !r.excludedReason);
+  return { regulars, gaps, latestIdx };
+}
+
 function GapsView({pantry, outOfStock}){
   const [minOrders, setMinOrders] = useState(3);
   const [filter, setFilter] = useState("gap"); // gap | all | restocked | excluded
@@ -1352,70 +1879,17 @@ function GapsView({pantry, outOfStock}){
   }, [pantry, outOfStock, leverageLimit]);
 
   const analysis = useMemo(()=>{
-    if (!TESCO_ORDERS.length) return null;
-    const latestIdx = TESCO_ORDERS.length - 1;
-    const latest = TESCO_ORDERS[latestIdx];
-
-    // Build family map across orders
-    const fam = new Map(); // key -> { example, orderIdxs:Set, lastSeenDate, exampleCount }
-    TESCO_ORDERS.forEach((o, i) => {
-      (o.items||[]).forEach(it => {
-        if (it.status === "unavailable") return;
-        const k = normaliseProductName(it.name);
-        if (!k) return;
-        if (!fam.has(k)) fam.set(k, { example: it.name, orderIdxs: new Set(), lastSeenDate: o.delivery_date, counts: new Map() });
-        const entry = fam.get(k);
-        entry.orderIdxs.add(i);
-        if ((o.delivery_date||"") > (entry.lastSeenDate||"")) entry.lastSeenDate = o.delivery_date;
-        entry.counts.set(it.name, (entry.counts.get(it.name)||0) + 1);
-      });
-    });
-    // Pick most common original name as the canonical example
-    for (const v of fam.values()) {
-      let best = null, bestN = -1;
-      for (const [n, c] of v.counts) if (c > bestN) { best = n; bestN = c; }
-      v.example = best;
-      delete v.counts;
-    }
-
-    const pantryKeys = new Set(pantry.map(p => p.item.toLowerCase()));
-
-    const regulars = [];
-    for (const [key, v] of fam) {
-      const count = v.orderIdxs.size;
-      if (count < minOrders) continue;
-      const inLatest = v.orderIdxs.has(latestIdx);
-      // Match to pantry — first by direct pantry-key substring, then by PANTRY_KEYWORDS map
-      let pantryItem = null;
-      for (const pk of pantryKeys) {
-        if (key.includes(pk) || (v.example||"").toLowerCase().includes(pk)) { pantryItem = pk; break; }
-      }
-      if (!pantryItem) pantryItem = findPantryMatch(v.example);
-      const allergen = khalilAllergenFlag(v.example);
-      const excluded = neverRestockReason(v.example);
-      regulars.push({
-        key,
-        example: v.example,
-        count,
-        inLatest,
-        lastSeenDate: v.lastSeenDate,
-        pantryItem,
-        allergen,
-        excludedReason: excluded,
-      });
-    }
-    regulars.sort((a,b)=> b.count - a.count || (a.lastSeenDate||"").localeCompare(b.lastSeenDate||""));
-
-    const gaps = regulars.filter(r => !r.pantryItem && !r.inLatest && !r.excludedReason);
-    const restocked = regulars.filter(r => r.inLatest || r.pantryItem);
-    const excluded = regulars.filter(r => r.excludedReason);
-
+    const base = computeRegularsAndGaps(pantry, minOrders);
+    if (!base) return null;
+    const latest = TESCO_ORDERS[base.latestIdx];
+    const restocked = base.regulars.filter(r => r.inLatest || r.pantryItem);
+    const excluded = base.regulars.filter(r => r.excludedReason);
     return {
       latest,
-      latestIdx,
+      latestIdx: base.latestIdx,
       orderCount: TESCO_ORDERS.length,
-      regulars,
-      gaps,
+      regulars: base.regulars,
+      gaps: base.gaps,
       restocked,
       excluded,
     };
@@ -1434,32 +1908,39 @@ function GapsView({pantry, outOfStock}){
 
   return <div className="space-y-5">
     <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-      <Stat label="Orders tracked" value={analysis.orderCount}/>
-      <Stat label="Latest delivery" value={analysis.latest.delivery_date} sub={`#${analysis.latest.order_number}`}/>
-      <Stat label={`Regulars (≥${minOrders})`} value={analysis.regulars.length}/>
+      <Stat label="Orders tracked" value={analysis.orderCount}
+        tip="Number of Tesco orders parsed from receipts. The more orders, the more reliable the 'regulars' detection."/>
+      <Stat label="Latest delivery" value={formatDate(analysis.latest.delivery_date)} sub={`#${analysis.latest.order_number}`}
+        tip="The most recent Tesco order. Items not in this order but historically bought regularly are candidates for the gap list."/>
+      <Stat label={`Regulars (≥${minOrders})`} value={analysis.regulars.length}
+        tip={`Items appearing in at least ${minOrders} different orders. Adjust the 'Min orders' selector below to be stricter or looser.`}/>
       <Stat label="Real gaps" value={analysis.gaps.length} tone={analysis.gaps.length>0?"warn":"ok"}
-            sub="Not in latest order, not in pantry"/>
+            sub="Not in latest order, not in pantry"
+            tip="The candidates for your next basket: items you buy regularly that aren't in your latest delivery and aren't already in the pantry. Excludes anything ruled out by a household never-restock rule."/>
       <Stat label="Excluded by rules" value={analysis.excluded.length} tone="info"
-            sub={`${(HOUSEHOLD_RULES.never_restock||[]).length} household rule(s)`}/>
+            sub={`${(HOUSEHOLD_RULES.never_restock||[]).length} household rule(s)`}
+            tipAlign="right"
+            tip="Items the household has explicitly told the system not to suggest restocking (e.g. dairy milk — no one drinks it). View the rule list by clicking the 'Excluded' filter pill."/>
     </div>
 
-    <Section title="What this view does" tone="info" collapsible>
+    <Section title="What this view does · pick your basket gaps" tone="info" collapsible
+      tip="Compares the items you buy most often against what you currently have. Filters by category below.">
       <p className="text-sm text-stone-700 leading-relaxed">
-        Compares <strong>regularly-purchased Tesco items</strong> (appearing in {minOrders}+ of {analysis.orderCount} orders) against the current pantry snapshot.
-        Items that appear repeatedly across orders but are <strong>missing from both the latest delivery and the current pantry</strong> are likely real gaps —
-        usually fresh produce or fast-moving items that decayed off the pantry list.
-        Items matching <strong>household never-restock rules</strong> (e.g. dairy milk — no one drinks it) are filtered out separately.
+        Looks at <strong>items you buy regularly</strong> (appearing in {minOrders}+ of {analysis.orderCount} orders) and checks each one against
+        (a) your latest Tesco delivery and (b) the current pantry snapshot. Items missing from both are <strong>likely real gaps</strong> —
+        usually fresh produce or fast-moving staples. Items matching <strong>household never-restock rules</strong> (e.g. dairy milk — no one drinks it) are filtered out separately so they don't keep appearing as 'gaps'.
       </p>
       <div className="flex flex-wrap items-center gap-3 mt-3 mb-4">
         <label className="text-sm flex items-center gap-2">
           <span className="text-stone-500">Min orders:</span>
-          <select value={minOrders} onChange={e=>setMinOrders(parseInt(e.target.value))} className="border border-stone-300 rounded px-2 py-1 text-sm">
+          <select value={minOrders} onChange={e=>setMinOrders(parseInt(e.target.value))} className="border border-stone-300 rounded px-2 py-1 text-sm" title="How many separate orders an item needs to appear in to count as a 'regular'. Higher = stricter.">
             <option value={2}>2 of {analysis.orderCount}</option>
             <option value={3}>3 of {analysis.orderCount}</option>
             <option value={4}>4 of {analysis.orderCount}</option>
             <option value={5}>5 of {analysis.orderCount}</option>
           </select>
         </label>
+        <span className="text-xs text-stone-500">Higher threshold = stricter definition of 'regular'.</span>
       </div>
 
       <div className="border-t border-stone-200 pt-4">
@@ -1473,14 +1954,14 @@ function GapsView({pantry, outOfStock}){
           <span className="text-xs text-stone-500">{visible.length} item{visible.length===1?"":"s"}</span>
         </div>
         <div className="flex flex-wrap gap-1 mb-3">
-          <button onClick={()=>setFilter("gap")} className="pill" data-active={filter==="gap"}>Real gaps · {analysis.gaps.length}</button>
-          <button onClick={()=>setFilter("restocked")} className="pill" data-active={filter==="restocked"}>Restocked / in pantry · {analysis.restocked.length}</button>
-          <button onClick={()=>setFilter("excluded")} className="pill" data-active={filter==="excluded"}>Excluded · {analysis.excluded.length}</button>
-          <button onClick={()=>setFilter("all")} className="pill" data-active={filter==="all"}>All regulars · {analysis.regulars.length}</button>
+          <button onClick={()=>setFilter("gap")} className="pill" data-active={filter==="gap"} title="Items you buy regularly that are NOT in the latest order and NOT in the pantry — the actual restock candidates">Real gaps · {analysis.gaps.length}</button>
+          <button onClick={()=>setFilter("restocked")} className="pill" data-active={filter==="restocked"} title="Regulars that ARE in the latest order or pantry — no action needed">Restocked / in pantry · {analysis.restocked.length}</button>
+          <button onClick={()=>setFilter("excluded")} className="pill" data-active={filter==="excluded"} title="Regulars filtered out by household never-restock rules">Excluded · {analysis.excluded.length}</button>
+          <button onClick={()=>setFilter("all")} className="pill" data-active={filter==="all"} title="Every regular regardless of status">All regulars · {analysis.regulars.length}</button>
         </div>
 
         {(HOUSEHOLD_RULES.never_restock||[]).length > 0 && filter === "excluded" && <div className="mb-3 p-3 rounded-lg border border-blue-200 bg-blue-50/30">
-          <div className="text-xs uppercase tracking-wider text-stone-500 mb-2">Household never-restock rules</div>
+          <div className="text-xs uppercase tracking-wider text-stone-500 mb-2 flex items-center">Household never-restock rules <InfoTip>Patterns the household has explicitly opted out of. Anything matching one of these is filtered out of the 'Real gaps' list.</InfoTip></div>
           <div className="space-y-1.5 text-sm">
             {HOUSEHOLD_RULES.never_restock.map((r,i)=> <div key={i} className="flex items-baseline gap-2">
               <span className="mono text-xs bg-stone-100 px-1.5 py-0.5 rounded">{r.pattern}</span>
@@ -1492,28 +1973,28 @@ function GapsView({pantry, outOfStock}){
         {visible.length === 0 ? <div className="text-sm text-stone-500">Nothing here at this threshold.</div>
         : <div className="card overflow-hidden">
           <div className="px-3 py-2 border-b border-stone-200 bg-stone-50 text-[11px] uppercase tracking-wider text-stone-500 grid grid-cols-12 gap-2">
-            <div className="col-span-1 text-center">×</div>
+            <div className="col-span-1 text-center" title="How many orders this item appeared in">×</div>
             <div className="col-span-6">Item</div>
             <div className="col-span-2">Last seen</div>
             <div className="col-span-3 text-right">Status</div>
           </div>
           <div className="divide-y divide-stone-100">
             {visible.map((r,i)=> <div key={i} className="grid grid-cols-12 gap-2 items-center px-3 py-2 text-sm">
-              <div className="col-span-1 text-center mono text-xs">{r.count}</div>
+              <div className="col-span-1 text-center mono text-xs" title={`Appeared in ${r.count} of ${analysis.orderCount} orders`}>{r.count}</div>
               <div className="col-span-6">
                 <div className="leading-tight">{r.example}</div>
                 <div className="mt-0.5 flex flex-wrap gap-1">
-                  {r.allergen && <Chip tone="warn">Khalil: {r.allergen}</Chip>}
-                  {r.pantryItem && <Chip tone="ok">pantry: {r.pantryItem}</Chip>}
-                  {r.excludedReason && <Chip tone="info">excluded</Chip>}
+                  {r.allergen && <Chip tone="warn" title="Contains a Khalil allergen — fine for adults, not for him">Khalil: {r.allergen}</Chip>}
+                  {r.pantryItem && <Chip tone="ok" title="Currently in pantry">pantry: {r.pantryItem}</Chip>}
+                  {r.excludedReason && <Chip tone="info" title="Filtered out by a household rule">excluded</Chip>}
                 </div>
               </div>
-              <div className="col-span-2 mono text-xs text-stone-500">{r.lastSeenDate||"—"}</div>
+              <div className="col-span-2 mono text-xs text-stone-500" title="Most recent order date this appeared in">{r.lastSeenDate?formatDate(r.lastSeenDate):"—"}</div>
               <div className="col-span-3 text-right">
-                {r.inLatest ? <Chip tone="ok">✓ in latest order</Chip>
-                 : r.pantryItem ? <Chip tone="ok">in pantry</Chip>
-                 : r.excludedReason ? <span className="text-xs text-stone-500">{r.excludedReason}</span>
-                 : <Chip tone="warn">gap</Chip>}
+                {r.inLatest ? <Chip tone="ok" title="Just bought — in the most recent order">✓ in latest order</Chip>
+                 : r.pantryItem ? <Chip tone="ok" title="Already in the current pantry">in pantry</Chip>
+                 : r.excludedReason ? <span className="text-xs text-stone-500" title={`Excluded reason: ${r.excludedReason}`}>{r.excludedReason}</span>
+                 : <Chip tone="warn" title="Bought regularly but missing from both the latest order and the pantry">gap</Chip>}
               </div>
             </div>)}
           </div>
@@ -1523,9 +2004,10 @@ function GapsView({pantry, outOfStock}){
 
     <Section
       title="Ingredients that unlock the most recipes"
-      subtitle="Ranked by how many household-safe recipes use each ingredient (Khalil-blocked recipes are excluded). Adding one to the pantry would boost the makeability of every recipe listed below it."
+      subtitle="Ranked by how many household-safe recipes use each ingredient. Adding one boosts the makeability of every recipe listed below it."
       tone="accent"
       collapsible
+      tip="A forward-looking view: rather than 'what should I buy this week', this asks 'what single ingredient would maximise the recipes I can make from existing pantry?'. Khalil-blocked recipes are excluded from the ranking."
     >
       <div className="flex flex-wrap items-center gap-3 mb-3">
         <label className="text-sm flex items-center gap-2">
@@ -1546,24 +2028,6 @@ function GapsView({pantry, outOfStock}){
       }
     </Section>
 
-    <Section title={`Order history · ${analysis.orderCount} Tesco orders`} subtitle="From embedded data" tone="neutral" collapsible defaultOpen={false}>
-      <div className="overflow-x-auto">
-        <table className="w-full text-xs">
-          <thead><tr className="text-stone-500">
-            <th className="text-left py-1.5">Delivery date</th>
-            <th className="text-left">Order #</th>
-            <th className="text-right">Items</th>
-            <th className="text-right">Total</th>
-          </tr></thead>
-          <tbody>{TESCO_ORDERS.slice().reverse().map((o,i)=> <tr key={i} className="border-t border-stone-100">
-            <td className="py-1 mono">{o.delivery_date}</td>
-            <td className="mono text-stone-500">{o.order_number}</td>
-            <td className="text-right mono">{(o.items||[]).filter(it=>it.status!=="unavailable").length}</td>
-            <td className="text-right mono">{o.total_paid_gbp!=null?`£${o.total_paid_gbp.toFixed(2)}`:"—"}</td>
-          </tr>)}</tbody>
-        </table>
-      </div>
-    </Section>
   </div>;
 }
 
@@ -1599,7 +2063,11 @@ function AuditView({pantry}){
   });
 
   return <div className="space-y-5">
-    <Section title="Workflow integrity" subtitle="Now that you've imported the fixed JSON files" tone="ok">
+    <div className="text-xs text-stone-600 bg-stone-50 border border-stone-200 rounded-lg px-3 py-2">
+      <strong>Library health check.</strong> Quick stats about the recipe library and pantry coverage — useful for spotting gaps in the data (missing tags, untagged recipes, manifest mismatches) rather than gaps in your basket.
+    </div>
+    <Section title="Workflow integrity" subtitle="Snapshot of how complete the structured data is" tone="ok"
+      tip="Each card reports on one quality dimension: are all recipes tagged with an audience, are all pantry items tagged with an allergen flag, etc. Green = OK, amber = a small fix needed.">
       <div className="grid sm:grid-cols-2 gap-3 text-sm">
         <GapCard label="Recipes with audience tag" value={taggedRecipes} of={RECIPES.length} severity={untagged > 0 ? "medium":"low"}
                  note={untagged > 0 ? `${untagged} recipes still untagged — re-import the patched files in /project-updates/.` : "All recipes now carry audience + eaters tags."}/>
@@ -1616,18 +2084,23 @@ function AuditView({pantry}){
       </div>
     </Section>
 
-    <Section title="Audience breakdown across library">
+    <Section title="Audience breakdown across library"
+      tip="How many recipes in each source file are safe for the whole household vs. adults-only vs. need-a-label-check. A high adults-only ratio means most recipes need adaptation if Khalil is eating.">
       <div className="grid sm:grid-cols-3 gap-3 mb-3">
-        <Stat label="Whole-household safe" value={byAudience["whole-household"].length} tone="ok" sub={`${Math.round(100*byAudience["whole-household"].length/RECIPES.length)}% of library`}/>
-        <Stat label="Needs check" value={byAudience["check"].length} tone="warn"/>
-        <Stat label="Adults only" value={byAudience["adults-only"].length} tone="info" sub={`${Math.round(100*byAudience["adults-only"].length/RECIPES.length)}%`}/>
+        <Stat label="Whole-household safe" value={byAudience["whole-household"].length} tone="ok" sub={`${Math.round(100*byAudience["whole-household"].length/RECIPES.length)}% of library`}
+          tip="Recipes with no Khalil-allergen ingredients (no eggs, dairy, wheat, lentils, peas, chickpeas, beans, avocado, beef, tree nuts) and that Max and Emily can also eat."/>
+        <Stat label="Needs check" value={byAudience["check"].length} tone="warn"
+          tip="Recipes that depend on a brand/label detail — usually soy sauce (use tamari for Khalil), oat products (check gluten), or similar."/>
+        <Stat label="Adults only" value={byAudience["adults-only"].length} tone="info" sub={`${Math.round(100*byAudience["adults-only"].length/RECIPES.length)}%`}
+          tipAlign="right"
+          tip="Recipes containing a Khalil allergen with no easy adaptation. Plan a parallel Khalil-safe dish on these nights."/>
       </div>
       <div className="text-xs text-stone-500 mb-2 uppercase tracking-wider">By source file</div>
       <div className="space-y-1">
         {bySource.map(s => <div key={s.source} className="grid grid-cols-12 gap-2 items-center text-sm">
           <div className="col-span-4 font-medium">{s.source}</div>
           <div className="col-span-1 text-right text-stone-500 text-xs">{s.total}</div>
-          <div className="col-span-7 flex h-3 rounded overflow-hidden border border-stone-200">
+          <div className="col-span-7 flex h-3 rounded overflow-hidden border border-stone-200" title={`${s.whole} whole-household · ${s.check} check · ${s.adults} adults-only`}>
             <div style={{flex:s.whole, background:"#16a34a"}} title={`${s.whole} whole-household`}/>
             <div style={{flex:s.check, background:"#d97706"}} title={`${s.check} check`}/>
             <div style={{flex:s.adults, background:"#2563eb"}} title={`${s.adults} adults-only`}/>
@@ -1641,11 +2114,12 @@ function AuditView({pantry}){
       </div>
     </Section>
 
-    <Section title="Khalil allergen audit on pantry" tone="info">
+    <Section title="Khalil allergen audit on pantry" tone="info"
+      tip="Pantry items currently flagged as either a confirmed allergen for Khalil or 'check label' (brand/recipe dependent). Useful when meal-planning to know what's in the kitchen he can't eat.">
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2 text-sm">
         {pantryAllergens.map((p,i)=> <div key={i} className="card px-3 py-2 flex items-center justify-between">
           <span className="font-medium">{p.item}</span>
-          {p.allergen_flag==="son_allergen" ? <Chip tone="danger">blocked</Chip> : <Chip tone="warn">check label</Chip>}
+          {p.allergen_flag==="son_allergen" ? <Chip tone="danger" title="Confirmed Khalil allergen">blocked</Chip> : <Chip tone="warn" title="Allergen status depends on the product label — verify before serving">check label</Chip>}
         </div>)}
       </div>
     </Section>
@@ -1653,10 +2127,13 @@ function AuditView({pantry}){
 }
 function GapCard({label, value, of, severity, note}){
   const tone = severity==="high"?"danger":severity==="medium"?"warn":"ok";
+  const sevTitle = severity==="high" ? "High severity — fix before relying on this data"
+    : severity==="medium" ? "Medium severity — small fix recommended"
+    : "Low severity — all good";
   return <div className="card p-3">
     <div className="flex items-start justify-between gap-2 mb-1">
       <div className="font-medium text-sm leading-snug">{label}</div>
-      <Chip tone={tone}>{severity}</Chip>
+      <Chip tone={tone} title={sevTitle}>{severity}</Chip>
     </div>
     <div className="mono text-xs text-stone-500 mb-1.5">{value}{of!==undefined && of!=="—" ? ` / ${of}`:""}</div>
     <div className="text-xs text-stone-600 leading-snug">{note}</div>
@@ -1670,26 +2147,40 @@ function App(){
   const [pantry] = useState(RAW.current_pantry.pantry);
   const [cooked, setCooked] = useState(initialState?.cooked || []);
   const [outOfStock, setOutOfStock] = useState(new Set(initialState?.outOfStock || []));
+  // qtyAdjustments: { [itemName]: integerDelta } applied on top of the snapshot qty.
+  // Stored in localStorage so users see consistent state across reloads. Negative = consumed; positive = bought more.
+  const [qtyAdjustments, setQtyAdjustments] = useState(initialState?.qtyAdjustments || {});
   const [eaterFilter, setEaterFilter] = useState(initialState?.eaterFilter || "all");
   const [showStorageNote, setShowStorageNote] = useState(STORAGE_OK ? false : true);
+  // Help banner — auto-dismisses after first dismissal, remembered in localStorage
+  const [showHelpBanner, setShowHelpBanner] = useState(() => {
+    if (!STORAGE_OK) return true;
+    try { return localStorage.getItem(LS_KEY + ':help-dismissed') !== '1'; } catch { return true; }
+  });
+  const dismissHelpBanner = useCallback(() => {
+    setShowHelpBanner(false);
+    if (STORAGE_OK) { try { localStorage.setItem(LS_KEY + ':help-dismissed', '1'); } catch {} }
+  }, []);
 
   // Persist on changes
   useEffect(()=>{
     if (!STORAGE_OK) return;
     saveState({
-      tab, cooked, outOfStock: [...outOfStock], eaterFilter,
+      tab, cooked, outOfStock: [...outOfStock], qtyAdjustments, eaterFilter,
       version: 1, savedAt: new Date().toISOString(),
     });
-  }, [tab, cooked, outOfStock, eaterFilter]);
+  }, [tab, cooked, outOfStock, qtyAdjustments, eaterFilter]);
 
   const tabs = [
-    ["planner","Planner"],
-    ["recipes","Recipes"],
-    ["pantry","Pantry"],
-    ["tesco","Orders"],
-    ["gaps","Gaps"],
-    ["audit","Workflow audit"],
+    ["planner","Planner", "What to cook this week, grouped by what's expiring, what's whole-household-safe, and what's high-protein."],
+    ["recipes","Recipes", "Search and filter every recipe in your library. Sort by makeability, protein, or prep time."],
+    ["pantry","Pantry", "Everything currently in the kitchen, with expiry and confidence tracking. Mark items out of stock if you've used them up."],
+    ["tesco","Orders", "Past Tesco deliveries — spend trends, repeat purchases, substitutions, and Khalil allergen exposure. Read-only."],
+    ["gaps","Gaps", "Items you buy regularly that are missing from both your latest order and the pantry — candidates for the next basket."],
+    ["audit","Stats", "Library health check — recipe coverage, allergen tagging, and audience breakdown by source."],
   ];
+
+  const currentTabMeta = tabs.find(t => t[0] === tab);
 
   const addCooked = useCallback((r) => {
     const entry = {
@@ -1717,53 +2208,80 @@ function App(){
       return next;
     });
   }, []);
+  const adjustQty = useCallback((itemName, delta) => {
+    setQtyAdjustments(prev => {
+      const next = {...prev};
+      const newVal = (next[itemName] || 0) + delta;
+      if (newVal === 0) delete next[itemName]; else next[itemName] = newVal;
+      return next;
+    });
+  }, []);
 
   const exportAll = () => {
     const blob = new Blob([JSON.stringify({
-      cooked, outOfStock: [...outOfStock], exported_at: new Date().toISOString()
+      cooked, outOfStock: [...outOfStock], qtyAdjustments, exported_at: new Date().toISOString()
     }, null, 2)], {type:"application/json"});
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href=url; a.download=`grocery-state-${new Date().toISOString().slice(0,10)}.json`; a.click();
     URL.revokeObjectURL(url);
   };
   const clearAll = () => {
-    if (confirm("Clear ALL saved data (cooked log, marked-out items)? This cannot be undone.")) {
-      setCooked([]); setOutOfStock(new Set());
+    if (confirm("Clear ALL saved data (cooked log, marked-out items, qty adjustments)? This cannot be undone.")) {
+      setCooked([]); setOutOfStock(new Set()); setQtyAdjustments({});
       try { localStorage.removeItem(LS_KEY); } catch {}
     }
   };
+
+  const expiringCount = pantry.filter(p=>!outOfStock.has(p.item) && daysUntilExpiry(p)!==null && daysUntilExpiry(p)<=5).length;
+  const orderCount = (RAW.tesco_orders||[]).length;
 
   return <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-10">
     <header className="flex flex-wrap items-end justify-between gap-3 mb-4">
       <div>
         <h1 className="text-3xl font-semibold tracking-tight">Grocery intelligence</h1>
-        <p className="text-stone-500 text-sm mt-1">{RECIPES.length} recipes · {pantry.length} pantry items · {pantry.filter(p=>!outOfStock.has(p.item) && daysUntilExpiry(p)!==null && daysUntilExpiry(p)<=5).length} expiring soon · {cooked.length} cooked · {(RAW.tesco_orders||[]).length} orders</p>
+        <p className="text-stone-500 text-sm mt-1">
+          <span title="Total recipes across all sources">{RECIPES.length} recipes</span>
+          {" · "}
+          <span title="Items currently tracked in your pantry">{pantry.length} pantry items</span>
+          {" · "}
+          <span title="Pantry items expiring in 5 days or fewer">{expiringCount} expiring soon</span>
+          {" · "}
+          <span title="Recipes you've marked cooked in this browser">{cooked.length} cooked</span>
+          {" · "}
+          <span title="Tesco deliveries parsed from receipt emails">{orderCount} orders</span>
+        </p>
       </div>
       <div className="text-xs text-stone-500 mono flex flex-col items-end gap-1">
         <span>snapshot {GENERATED_AT}</span>
         <div className="flex gap-2">
-          <button onClick={exportAll} className="pill">Export state</button>
-          <button onClick={clearAll} className="pill" style={{color:"#dc2626"}}>Reset</button>
+          {!showHelpBanner && <button onClick={()=>setShowHelpBanner(true)} className="pill" title="Reopen the introduction panel">? Help</button>}
+          <button onClick={exportAll} className="pill" title="Download your local-only data (cooked log + out-of-stock marks) as a JSON file. Paste it into a Claude session to update canonical state.">Export state</button>
+          <button onClick={clearAll} className="pill" style={{color:"#dc2626"}} title="Clear cooked log and out-of-stock marks. Pantry snapshot is not affected — it comes from the embedded data.">Reset</button>
         </div>
       </div>
     </header>
+
+    {showHelpBanner && <HelpBanner onDismiss={dismissHelpBanner}/>}
 
     {showStorageNote && !STORAGE_OK && <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-sm text-amber-800 mb-4 flex items-center justify-between">
       <span>⚠️ Browser storage is unavailable — your changes won't persist across reloads. This usually means the page is being viewed inside an iframe or sandbox. Download the file and open it directly to enable saving.</span>
       <button onClick={()=>setShowStorageNote(false)} className="text-xs underline">dismiss</button>
     </div>}
 
-    <div className="flex flex-wrap gap-0 mb-5 border-b border-stone-200">
+    <div className="flex flex-wrap gap-0 mb-1 border-b border-stone-200">
       {tabs.map(([k,l])=>
         <button key={k} data-active={tab===k} onClick={()=>setTab(k)} className="navtab">
           {l}
         </button>
       )}
     </div>
+    {currentTabMeta && <div className="tab-subtitle">{currentTabMeta[2]}</div>}
+
+    <LegendStrip/>
 
     {tab==="planner" && <PlannerView pantry={pantry} outOfStock={outOfStock} cooked={cooked}/>}
     {tab==="recipes" && <RecipesView pantry={pantry} outOfStock={outOfStock} cooked={cooked} addCooked={addCooked} eaterFilter={eaterFilter} setEaterFilter={setEaterFilter}/>}
-    {tab==="pantry" && <PantryView pantry={pantry} outOfStock={outOfStock} toggleOutOfStock={toggleOutOfStock}/>}
+    {tab==="pantry" && <PantryView pantry={pantry} outOfStock={outOfStock} toggleOutOfStock={toggleOutOfStock} qtyAdjustments={qtyAdjustments} adjustQty={adjustQty}/>}
     {tab==="tesco" && <OrdersView/>}
     {tab==="gaps" && <GapsView pantry={pantry} outOfStock={outOfStock}/>}
     {tab==="audit" && <AuditView pantry={pantry}/>}
@@ -1786,6 +2304,15 @@ function App(){
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+  <script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('service-worker.js')
+        .then(reg => console.log('SW registered:', reg.scope))
+        .catch(err => console.error('SW registration failed:', err));
+    });
+  }
 </script>
 </body>
 </html>
