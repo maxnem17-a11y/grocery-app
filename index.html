@@ -90,9 +90,12 @@ const { useState, useMemo, useEffect, useCallback } = React;
 // (2) only apply changes not already listed, (3) append a new
 // entry below describing what they changed.
 // ============================================================
-const SITE_VERSION = "2026-05-13.6";
+const SITE_VERSION = "2026-05-13.7";
 const SITE_CHANGELOG = [
   // newest first
+  { version: "2026-05-13.7", date: "2026-05-13", changes: [
+    "Pantry tab now responsive: on mobile (<640px) each row renders as a stacked card with item + Khalil chip on top, category + expiry on the next line, qty controls + confidence bar together, and the Out of stock action at the bottom. Desktop keeps the original 12-column table. Fixes the column-overlap issue on phone screens.",
+  ]},
   { version: "2026-05-13.6", date: "2026-05-13", changes: [
     "Suggested next basket: every row now shows a suggested order quantity and pack size (e.g. '3× 520g').",
     "Quantity is derived from your typical Tesco order history for that product family. Pack size is extracted from the most-common product name (weight/volume tokens like '520g', '1.5kg', '400ml', else '4 pack').",
@@ -576,7 +579,8 @@ function PantryView({pantry, outOfStock, toggleOutOfStock, qtyAdjustments, adjus
       </div>
     </div>
     <div className="card overflow-hidden">
-      <div className="grid grid-cols-12 gap-2 text-xs text-stone-500 uppercase tracking-wider px-4 py-2 border-b border-stone-200 bg-stone-50">
+      {/* Desktop table header — hidden on mobile */}
+      <div className="hidden sm:grid grid-cols-12 gap-2 text-xs text-stone-500 uppercase tracking-wider px-4 py-2 border-b border-stone-200 bg-stone-50">
         <div className="col-span-3">Item</div>
         <div className="col-span-2">Category</div>
         <div className="col-span-2 text-center">Qty</div>
@@ -587,30 +591,73 @@ function PantryView({pantry, outOfStock, toggleOutOfStock, qtyAdjustments, adjus
       </div>
       <div className="divide-y divide-stone-100">
         {filtered.map((r,i)=> (
-          <div key={r.item+i} className={`grid grid-cols-12 gap-2 items-center px-4 py-2 text-sm ${r._out?"opacity-40 line-through":""}`}>
-            <div className="col-span-3 font-medium" title={r.purchased ? `bought ${formatDate(r.purchased)}` : ""}>{r.item}</div>
-            <div className="col-span-2 text-stone-500 text-xs">{r.category}</div>
-            <div className="col-span-2 text-center mono text-xs flex items-center justify-center gap-1">
-              <button onClick={()=>adjustQty(r.item, -1)} disabled={r._out} className="qty-btn" title="Decrement qty (used one)">−</button>
-              <span className="min-w-[55px] inline-block">{renderQty(r.qty, r._delta)}</span>
-              <button onClick={()=>adjustQty(r.item, +1)} disabled={r._out} className="qty-btn" title="Increment qty (bought more)">+</button>
+          <div key={r.item+i} className={r._out?"opacity-40":""}>
+            {/* Desktop row — 12-column grid */}
+            <div className={`hidden sm:grid grid-cols-12 gap-2 items-center px-4 py-2 text-sm ${r._out?"line-through":""}`}>
+              <div className="col-span-3 font-medium" title={r.purchased ? `bought ${formatDate(r.purchased)}` : ""}>{r.item}</div>
+              <div className="col-span-2 text-stone-500 text-xs">{r.category}</div>
+              <div className="col-span-2 text-center mono text-xs flex items-center justify-center gap-1">
+                <button onClick={()=>adjustQty(r.item, -1)} disabled={r._out} className="qty-btn" title="Decrement qty (used one)">−</button>
+                <span className="min-w-[55px] inline-block">{renderQty(r.qty, r._delta)}</span>
+                <button onClick={()=>adjustQty(r.item, +1)} disabled={r._out} className="qty-btn" title="Increment qty (bought more)">+</button>
+              </div>
+              <div className="col-span-1"><Bar pct={r._conf}/><div className="mono text-[10px] text-stone-500 mt-0.5">{r._conf}%</div></div>
+              <div className="col-span-1 text-xs" title={r.expires ? `expires ${formatDate(r.expires)}` : ""}>
+                {r._dExp===null ? <span className="text-stone-400">—</span>
+                  : r._dExp <= 0 ? <span className="text-red-700 font-medium">overdue</span>
+                  : r._dExp <= 5 ? <span className="text-amber-700 font-medium">{r._dExp}d</span>
+                  : <span className="text-stone-500">{r._dExp}d</span>}
+              </div>
+              <div className="col-span-1 text-center">
+                {r._flag==="son_allergen" ? <Chip tone="danger" title="Contains an ingredient Khalil cannot eat">⚠️</Chip>
+                  : r._flag==="check" ? <Chip tone="warn" title="May contain a Khalil allergen — check the product label">?</Chip>
+                  : <Chip tone="ok" title="Safe for Khalil">✓</Chip>}
+              </div>
+              <div className="col-span-2 text-right">
+                <button onClick={()=>toggleOutOfStock(r.item)} className="text-[11px] text-stone-500 hover:text-red-700 underline" title={r._out?"Restore this item to the pantry":"Mark this item as out of stock — it will be excluded from recipe matching"}>
+                  {r._out ? "Restore" : "Out of stock"}
+                </button>
+              </div>
             </div>
-            <div className="col-span-1"><Bar pct={r._conf}/><div className="mono text-[10px] text-stone-500 mt-0.5">{r._conf}%</div></div>
-            <div className="col-span-1 text-xs" title={r.expires ? `expires ${formatDate(r.expires)}` : ""}>
-              {r._dExp===null ? <span className="text-stone-400">—</span>
-                : r._dExp <= 0 ? <span className="text-red-700 font-medium">overdue</span>
-                : r._dExp <= 5 ? <span className="text-amber-700 font-medium">{r._dExp}d</span>
-                : <span className="text-stone-500">{r._dExp}d</span>}
-            </div>
-            <div className="col-span-1 text-center">
-              {r._flag==="son_allergen" ? <Chip tone="danger" title="Contains an ingredient Khalil cannot eat">⚠️</Chip>
-                : r._flag==="check" ? <Chip tone="warn" title="May contain a Khalil allergen — check the product label">?</Chip>
-                : <Chip tone="ok" title="Safe for Khalil">✓</Chip>}
-            </div>
-            <div className="col-span-2 text-right">
-              <button onClick={()=>toggleOutOfStock(r.item)} className="text-[11px] text-stone-500 hover:text-red-700 underline" title={r._out?"Restore this item to the pantry":"Mark this item as out of stock — it will be excluded from recipe matching"}>
-                {r._out ? "Restore" : "Out of stock"}
-              </button>
+            {/* Mobile card — stacked layout */}
+            <div className="sm:hidden px-3 py-3 text-sm">
+              {/* Row 1: item name + Khalil chip */}
+              <div className="flex items-start justify-between gap-2 mb-1.5">
+                <div className={`font-medium flex-1 min-w-0 break-words ${r._out?"line-through":""}`} title={r.purchased ? `bought ${formatDate(r.purchased)}` : ""}>{r.item}</div>
+                <div className="shrink-0">
+                  {r._flag==="son_allergen" ? <Chip tone="danger" title="Contains an ingredient Khalil cannot eat">⚠️</Chip>
+                    : r._flag==="check" ? <Chip tone="warn" title="May contain a Khalil allergen — check the product label">?</Chip>
+                    : <Chip tone="ok" title="Safe for Khalil">✓</Chip>}
+                </div>
+              </div>
+              {/* Row 2: category + expiry */}
+              <div className="flex items-center justify-between gap-2 text-xs text-stone-500 mb-2">
+                <span>{r.category}</span>
+                <span title={r.expires ? `expires ${formatDate(r.expires)}` : ""}>
+                  {r._dExp===null ? <span className="text-stone-400">no expiry</span>
+                    : r._dExp <= 0 ? <span className="text-red-700 font-medium">overdue</span>
+                    : r._dExp <= 5 ? <span className="text-amber-700 font-medium">expires in {r._dExp}d</span>
+                    : <span className="text-stone-500">expires in {r._dExp}d</span>}
+                </span>
+              </div>
+              {/* Row 3: qty controls + confidence bar */}
+              <div className="flex items-center gap-3 mb-2">
+                <div className="flex items-center gap-1.5 mono text-xs">
+                  <button onClick={()=>adjustQty(r.item, -1)} disabled={r._out} className="qty-btn" title="Decrement qty">−</button>
+                  <span className="min-w-[50px] text-center inline-block">{renderQty(r.qty, r._delta)}</span>
+                  <button onClick={()=>adjustQty(r.item, +1)} disabled={r._out} className="qty-btn" title="Increment qty">+</button>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <Bar pct={r._conf}/>
+                  <div className="mono text-[10px] text-stone-500 mt-0.5">{r._conf}% confidence</div>
+                </div>
+              </div>
+              {/* Row 4: action button */}
+              <div className="flex justify-end">
+                <button onClick={()=>toggleOutOfStock(r.item)} className="text-[11px] text-stone-500 hover:text-red-700 underline" title={r._out?"Restore this item to the pantry":"Mark this item as out of stock"}>
+                  {r._out ? "Restore" : "Out of stock"}
+                </button>
+              </div>
             </div>
           </div>
         ))}
