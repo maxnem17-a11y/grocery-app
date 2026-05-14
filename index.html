@@ -3,6 +3,14 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
+<!-- HTML cache-busting. GitHub Pages serves index files with a 10-minute
+     cache-control by default, so a fresh deploy doesn't visibly appear
+     until that expires or the user hard-refreshes. These three tags ask
+     the browser to revalidate with the server on every load instead.
+     Adds one cheap conditional GET per page load (~50-100ms); worth it. -->
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>Grocery Intelligence — Household Dashboard</title>
   <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -90,9 +98,16 @@ const { useState, useMemo, useEffect, useCallback, useRef, createContext, useCon
 // (2) only apply changes not already listed, (3) append a new
 // entry below describing what they changed.
 // ============================================================
-const SITE_VERSION = "2026-05-14.7";
+const SITE_VERSION = "2026-05-14.8";
 const SITE_CHANGELOG = [
   // newest first
+  { version: "2026-05-14.8", date: "2026-05-14", changes: [
+    "**HTML cache-busting + service worker disabled.** Reported friction on 14.7: even after pushing a new commit, the site kept serving the previous version on desktop and mobile until a hard refresh. Two layers were at play. (1) GitHub Pages serves index HTML with a 10-minute browser cache-control by default, so a regular reload happily uses the stale cached copy. (2) The page had been registering a service worker from `service-worker.js` since some earlier commit; nobody on this project actually knew what it cached (the parked items list flagged this as never-investigated), but a SW can intercept fetches before the HTTP cache layer and serve stale content indefinitely regardless of refresh.",
+    "Fix layer 1: added the standard three no-cache meta tags to `<head>` (`Cache-Control: no-cache, no-store, must-revalidate`, `Pragma: no-cache`, `Expires: 0`). Browser revalidates with origin on every load. Adds one cheap conditional GET per page (~50-100ms); for a single-user dashboard where freshness matters, worth it.",
+    "Fix layer 2: replaced the SW registration block at the bottom of `<body>` with an unregister-all stub. Runs on every page load, iterates `navigator.serviceWorker.getRegistrations()`, unregisters each. Idempotent — once every user (i.e. you, two devices) has visited once, no SWs remain anywhere. Cheap to leave in indefinitely; can be removed in a future cleanup commit once confident no users still have a registered SW.",
+    "Note: this commit itself still needs one hard refresh (or 10 minutes) to land on devices that have an existing cached copy without these meta tags. After that single hard refresh, future commits should appear on regular reload.",
+    "Removes one item from the parked list: the never-investigated service-worker.js. Whatever it was caching is now actively being un-cached on every visit.",
+  ]},
   { version: "2026-05-14.7", date: "2026-05-14", changes: [
     "**Mobile qty edits no longer lost on refresh.** Reported symptom: tap +/- on a pantry item on mobile, refresh the page, the change is gone. Root cause: the qty PATCH was debounced 500ms (added in 14.1 to coalesce rapid taps). If you refresh, swipe back, or background the app within that window, the setTimeout is killed before the PATCH fires. localStorage looks correct on first paint (the autosave useEffect ran synchronously), but the boot fetch then overwrites the local seed with the stale server value. Mobile hits this far more than desktop because iOS Safari pauses JS timers on app-switch and pull-to-refresh, and tap-then-refresh on mobile is faster than 500ms.",
     "Fix: dropped debounce window from 500ms → 150ms (still coalesces a rapid burst of +++ taps but doesn't sit on writes long enough to lose them in normal use), and added a `pagehide` + `visibilitychange→hidden` flush handler that synchronously fires any pending qty PATCH with `fetch({ keepalive: true })`. `keepalive` is the standard mobile pattern — tells the browser to complete the request even if the page is unloading. Per-item pending values are tracked in the existing `pendingQtyValues` ref so the flush knows what to send without reading React state.",
@@ -3125,12 +3140,24 @@ function App(){
 ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
 </script>
   <script>
+  // Service worker is intentionally disabled. An earlier commit registered
+  // one from `service-worker.js` but no one knows what it cached; the parked
+  // items list flagged this as never-investigated. Combined with HTML-cache
+  // staleness reported on 14.7, the simplest safe move is to actively kill
+  // any registered SW on load and stop registering new ones. The browser
+  // HTTP cache (handled by the no-cache meta tags in <head>) is the only
+  // caching layer we want.
+  //
+  // This block runs on every page load and is idempotent — once all users
+  // have visited once, no SWs remain. Cheap to leave in indefinitely.
   if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('service-worker.js')
-        .then(reg => console.log('SW registered:', reg.scope))
-        .catch(err => console.error('SW registration failed:', err));
-    });
+    navigator.serviceWorker.getRegistrations()
+      .then(regs => {
+        for (const reg of regs) {
+          reg.unregister().then(ok => console.log('SW unregistered:', ok, reg.scope));
+        }
+      })
+      .catch(err => console.warn('SW unregister check failed:', err));
   }
 </script>
 </body>
