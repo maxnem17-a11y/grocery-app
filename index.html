@@ -274,7 +274,13 @@ const SUPABASE = {
 // ============================================================
 const RAW = JSON.parse(document.getElementById('raw-data').textContent);
 const GENERATED_AT = "2026-05-11";
-const TODAY = new Date(GENERATED_AT + "T12:00:00Z");
+// TODAY is anchored to the real current date (not GENERATED_AT) so expiry
+// day-counts stay accurate even when the embedded snapshot is a few days stale.
+// GENERATED_AT is kept purely as a display label showing when the data was last refreshed.
+const TODAY = (() => {
+  const now = new Date();
+  return new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate(), 12, 0, 0));
+})();
 
 // ===== Receipts context =====
 // Receipts are fetched from Supabase on mount and stored in React state.
@@ -983,11 +989,20 @@ function PantryView({pantry, outOfStock, toggleOutOfStock, qtyAdjustments, adjus
               <button onClick={()=>adjustQty(r.item, +1)} disabled={r._out} className="qty-btn" title="Increment qty (bought more)">+</button>
             </div>
             <div className="col-span-1"><Bar pct={r._conf}/><div className="mono text-[10px] text-stone-500 mt-0.5">{r._conf}%</div></div>
-            <div className="col-span-1 text-xs" title={r.expires ? `expires ${formatDate(r.expires)}` : ""}>
+            <div className="col-span-1 text-xs leading-tight" title={r.expires ? `expires ${formatDate(r.expires)}` : ""}>
               {r._dExp===null ? <span className="text-stone-400">—</span>
-                : r._dExp <= 0 ? <span className="text-red-700 font-medium">overdue</span>
-                : r._dExp <= 5 ? <span className="text-amber-700 font-medium">{r._dExp}d</span>
-                : <span className="text-stone-500">{r._dExp}d</span>}
+                : r._dExp <= 0 ? <>
+                    <div className="text-red-700 font-semibold">overdue</div>
+                    <div className="text-red-600 mono text-[10px]">{formatDate(r.expires)}</div>
+                  </>
+                : r._dExp <= 5 ? <>
+                    <div className="text-amber-700 font-semibold">{formatDate(r.expires)}</div>
+                    <div className="text-amber-600 mono text-[10px]">in {r._dExp}d</div>
+                  </>
+                : <>
+                    <div className="text-stone-700">{formatDate(r.expires)}</div>
+                    <div className="text-stone-400 mono text-[10px]">in {r._dExp}d</div>
+                  </>}
             </div>
             <div className="col-span-1 text-center">
               {r._flag==="son_allergen" ? <Chip tone="danger" title="Contains an ingredient Khalil cannot eat">⚠️</Chip>
@@ -2644,11 +2659,9 @@ function App(){
 
   const [eaterFilter, setEaterFilter] = useState(initialState?.eaterFilter || "all");
   const [showStorageNote, setShowStorageNote] = useState(STORAGE_OK ? false : true);
-  // Help banner — auto-dismisses after first dismissal, remembered in localStorage
-  const [showHelpBanner, setShowHelpBanner] = useState(() => {
-    if (!STORAGE_OK) return true;
-    try { return localStorage.getItem(LS_KEY + ':help-dismissed') !== '1'; } catch { return true; }
-  });
+  // Help banner — closed by default; opens via the "? Help" button in the header.
+  // Dismissal is remembered in localStorage so reopens stay sticky within a session.
+  const [showHelpBanner, setShowHelpBanner] = useState(false);
   const dismissHelpBanner = useCallback(() => {
     setShowHelpBanner(false);
     if (STORAGE_OK) { try { localStorage.setItem(LS_KEY + ':help-dismissed', '1'); } catch {} }
