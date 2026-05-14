@@ -105,14 +105,9 @@ const { useState, useMemo, useEffect, useCallback, useRef, createContext, useCon
 // (2) only apply changes not already listed, (3) append a new
 // entry below describing what they changed.
 // ============================================================
-const SITE_VERSION = "2026-05-14.17";
+const SITE_VERSION = "2026-05-14.16";
 const SITE_CHANGELOG = [
   // newest first
-  { version: "2026-05-14.17", date: "2026-05-14", changes: [
-    "**Stats → Workflow integrity: severity chip relabelled as a status chip.** The cards displayed `low` / `medium` / `high` taken straight from the `severity` prop. On a green health-check card, `low` was read as 'low score' or 'low value' (matching the rest of the dashboard, where every other 'low' — low pantry, low confidence — means something bad), so a row that was actually saying 'all good' looked like it was reporting a problem. Replaced the literal severity string with a status label: severity=low renders `✓ OK`, severity=medium renders `⚠ Fix needed`, severity=high renders `⚠ Critical action needed`. The `tone` mapping (ok/warn/danger → green/amber/red chip) is unchanged, the `severity` prop name is unchanged, the tooltips were rewritten to match the new vocabulary. Internal API stable; only the rendered chip text and titles changed.",
-    "**Section subtitle + tip rewritten for the same reason.** Subtitle was 'Snapshot of how complete the structured data is' — accurate but didn't explain how to read the cards. Now: 'Health check — green means all good, amber means a small fix is needed'. The tip on the section header now spells out the three chip states so the legend lives on the section, not just inside individual tooltips.",
-    "**Dead ternary on makeable_pct card simplified.** The card had `severity={hasMakeablePct < RECIPES.length/2 ? \"low\":\"low\"}` — both branches returned `low`, so the ternary was unreachable code from a previous edit. Replaced with the literal `severity=\"low\"`. The card's meaning is unchanged (makeable_pct is computed live, not stored, and that's intentional — so 'OK' is the correct status).",
-  ]},
   { version: "2026-05-14.16", date: "2026-05-14", changes: [
     "**Sort toggle: binary asc↔desc, no third-state reset.** All three sortable tables (Pantry, Gaps regulars, Leverage) now use a simple two-state toggle. Previously: first click set the column's default direction, second click reversed, third click reset everything back to the table's default column. The reset was confusing — users didn't expect a third click to take them somewhere different from clicks 1 or 2, and there was no visual signal that 'reset' was a state the toggle could land in. Standard table convention is binary asc↔desc, and that's what this is now. Click 1 sorts; click 2 reverses; click 3 reverses again. The table's default sort is still recoverable by clicking a different column and clicking back.",
     "**First-click direction is now per-column, picked to land on the 'interesting end'.** Rather than the previous string=asc / numeric=desc heuristic, each column declares its own opening direction in a `DEFAULT_DIR` map. The heuristic was wrong on several columns — Expires wants soonest-first (asc on date), Last seen wants stalest-first (asc on timestamp, since older dates are smaller numbers), Conf wants lowest-first (asc, what's at risk). Specific defaults: Pantry — `item/category/qty/conf/expires/khalil` all asc (lowest/soonest/most-flagged first). Gaps regulars — `count` desc, `item` asc, `lastSeen` asc (oldest timestamps = stalest items, surfaced first), `status` asc (gap=0 first — already correct from 14.15). Leverage — `ingredient` asc, `recipes/boost/to70` all desc (highest-impact first).",
@@ -1102,12 +1097,12 @@ function PantryView({pantry, outOfStock, toggleOutOfStock, qtyAdjustments, adjus
         tip="Items with an estimated expiry date within the next 5 days. Use the Planner tab to find recipes that use them."/>
       <Stat label="Low confidence" value={counts.low} tone={counts.low>0?"warn":"ok"}
         tip="Items with confidence under 30%. Confidence decays from 95% on purchase day based on category (fresh produce decays fast; dry goods decay slowly). Low confidence ≠ definitely gone — just less certain it's still usable."/>
+      <Stat label="Marked out" value={counts.out} tone={counts.out>0?"danger":"ok"}
+        tip="Items you've manually marked as out of stock in this browser. They're excluded from recipe matching and shown struck-through. Click 'Restore' on a row to undo."/>
       <Stat label="Khalil-allergen" value={counts.son} tone="info"
+        tipAlign="right"
         tip="Items containing one of Khalil's allergens (dairy, eggs, wheat, lentils, peas, chickpeas, beans, avocado, beef, tree nuts) or marked as 'check label'. Tracked so meal planning excludes them when needed. Click to see the full list."
         onClick={() => setKhalilOpen(o => !o)} expanded={khalilOpen}/>
-      <Stat label="Marked out" value={counts.out} tone={counts.out>0?"danger":"ok"}
-        tipAlign="right"
-        tip="Items you've manually marked as out of stock in this browser. They're excluded from recipe matching and shown struck-through. Click 'Restore' on a row to undo."/>
     </div>
     {khalilOpen && <div className="card p-4 mb-4 border-blue-200 bg-blue-50/30">
       <div className="flex items-baseline justify-between mb-3 flex-wrap gap-2">
@@ -1287,7 +1282,7 @@ function RecipesView({pantry, outOfStock, cooked, addCooked, eaterFilter, setEat
         const wasCooked = cookedSet.has(r.id);
         // Format source: "East p.115" for books, just file slug for web/instagram
         const sourceLabel = r.source && r.source.type === "book"
-          ? `${r.source.title || "Book"}${r.source.page ? ` p.${r.source.page}` : ""}`
+          ? (r.source.title || "Book")
           : r._source_file;
         return <div key={r.id} className="card">
           <div role="button" tabIndex={0}
@@ -2806,14 +2801,14 @@ function AuditView({pantry}){
     <div className="text-xs text-stone-600 bg-stone-50 border border-stone-200 rounded-lg px-3 py-2">
       <strong>Library health check.</strong> Quick stats about the recipe library and pantry coverage — useful for spotting gaps in the data (missing tags, untagged recipes, manifest mismatches) rather than gaps in your basket.
     </div>
-    <Section title="Workflow integrity" subtitle="Health check — green means all good, amber means a small fix is needed" tone="ok"
-      tip="Each card reports on one data-quality dimension: are all recipes tagged with an audience, are all pantry items tagged with an allergen flag, etc. Status chip on each card: ✓ OK = nothing to do, ⚠ Fix needed = small repair recommended, ⚠ Critical action needed = fix before relying on this data.">
+    <Section title="Workflow integrity" subtitle="Snapshot of how complete the structured data is" tone="ok"
+      tip="Each card reports on one quality dimension: are all recipes tagged with an audience, are all pantry items tagged with an allergen flag, etc. Green = OK, amber = a small fix needed.">
       <div className="grid sm:grid-cols-2 gap-3 text-sm">
         <GapCard label="Recipes with audience tag" value={taggedRecipes} of={RECIPES.length} severity={untagged > 0 ? "medium":"low"}
                  note={untagged > 0 ? `${untagged} recipes still untagged — re-import the patched files in /project-updates/.` : "All recipes now carry audience + eaters tags."}/>
         <GapCard label="Pantry items with allergen_flag" value={pantryWithFlags} of={pantry.length} severity={pantryWithFlags < pantry.length ? "medium":"low"}
                  note={pantryWithFlags < pantry.length ? "Some pantry items missing the allergen_flag field — re-import the patched current_pantry.json." : "All pantry items tagged."}/>
-        <GapCard label="makeable_pct populated" value={hasMakeablePct} of={RECIPES.length} severity="low"
+        <GapCard label="makeable_pct populated" value={hasMakeablePct} of={RECIPES.length} severity={hasMakeablePct < RECIPES.length/2 ? "low":"low"}
                  note="Computed live on every render in this dashboard. Not stored persistently in the JSON — that's fine since pantry changes invalidate it."/>
         <GapCard label="Derived subsets" value="Generated" of="2 files" severity="low"
                  note="khalil-safe-meals.json (38) and max-pescatarian.json (93) regenerated and shipped in /project-updates/."/>
@@ -2857,16 +2852,13 @@ function AuditView({pantry}){
 }
 function GapCard({label, value, of, severity, note}){
   const tone = severity==="high"?"danger":severity==="medium"?"warn":"ok";
-  const sevLabel = severity==="high" ? "⚠ Critical action needed"
-    : severity==="medium" ? "⚠ Fix needed"
-    : "✓ OK";
-  const sevTitle = severity==="high" ? "Critical — fix before relying on this data"
-    : severity==="medium" ? "Small fix recommended"
-    : "All good — no action needed";
+  const sevTitle = severity==="high" ? "High severity — fix before relying on this data"
+    : severity==="medium" ? "Medium severity — small fix recommended"
+    : "Low severity — all good";
   return <div className="card p-3">
     <div className="flex items-start justify-between gap-2 mb-1">
       <div className="font-medium text-sm leading-snug">{label}</div>
-      <Chip tone={tone} title={sevTitle}>{sevLabel}</Chip>
+      <Chip tone={tone} title={sevTitle}>{severity}</Chip>
     </div>
     <div className="mono text-xs text-stone-500 mb-1.5">{value}{of!==undefined && of!=="—" ? ` / ${of}`:""}</div>
     <div className="text-xs text-stone-600 leading-snug">{note}</div>
