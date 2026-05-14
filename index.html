@@ -467,6 +467,44 @@ async function fetchHouseholdAllergens() {
   return sbFetch("household_allergens?select=eater,kind,token,category&order=eater.asc,kind.asc");
 }
 
+// Fetch the tesco_skus table — basket-key → Tesco SKU/URL mapping with
+// Khalil-critical and household-rule-excluded flags. Step 2 of the basket
+// automation: this data is joined onto basket items so downstream steps
+// (export button, Chrome handoff) can resolve the right Tesco product.
+// Only the preferred row per basket_key is needed for resolution.
+async function fetchTescoSkus() {
+  return sbFetch("tesco_skus?select=basket_key,tesco_name,tesco_sku,tesco_url,khalil_critical,household_rule_excluded,verified_safe&is_preferred=eq.true&limit=2000");
+}
+
+// Build a Map<lowercase-basket-key, sku-row> for O(1) lookup from a free-form
+// item name. Names are lowercased and trimmed; callers should do the same
+// before lookup. See lookupSku() below for the resolution helper.
+function buildSkuIndex(rows) {
+  const idx = new Map();
+  for (const r of (rows || [])) {
+    if (!r.basket_key) continue;
+    idx.set(String(r.basket_key).trim().toLowerCase(), r);
+  }
+  return idx;
+}
+
+// Look up a SKU row by free-form item name. Lowercase + trim before matching;
+// returns null if no entry found. Currently exact-match only — fuzzy lookup
+// can be added in a later step if the basket-suggester names diverge from
+// basket_key normalisation. For now, basket_key in the table was seeded from
+// the same name-normalisation used by the basket-suggester, so direct match
+// is the expected hit rate.
+function lookupSku(name, skuIndex) {
+  if (!name || !skuIndex) return null;
+  return skuIndex.get(String(name).trim().toLowerCase()) || null;
+}
+
+// Context for SKU index. Consumed by PlannerView's basket useMemo to attach
+// tesco_sku / tesco_url / flags to each basket item. Default empty Map so
+// consumers don't crash before the boot fetch lands; while empty, items
+// will have skuRow=null (needs_sku_lookup: true) — non-blocking by design.
+const TescoSkusContext = createContext(new Map());
+
 // Group the flat household_allergens rows into the nested config shape
 // consumers (flagsForRecipe, khalilAllergenFlag) need. Splits Khalil's
 // block tokens into a `blockByCategory` map so khalilAllergenFlag can
@@ -1367,6 +1405,14 @@ function PlannerView({pantry, outOfStock, cooked}){
   // recipes against household dietary rules; before the boot fetch lands
   // everything reads as Khalil-safe, then re-renders on update.
   const allergens = useContext(AllergensContext);
+  // Tesco SKU index comes from TescoSkusContext (commit B / Step 2 of basket
+  // automation). Used to attach tesco_sku / tesco_url / khalil_critical /
+  // household_rule_excluded to each basket item, and to filter out SKU-level
+  // household-rule exclusions via neverRestockReason(). Empty Map until the
+  // boot fetch lands; items will surface with needs_sku_lookup=true and
+  // skuRow=null in that window, which is non-blocking — downstream steps
+  // can flag them rather than crash.
+  const skuIndex = useContext(TescoSkusContext);
   const matchSet = useMemo(()=> pantryMatchSet(pantry, outOfStock), [pantry, outOfStock]);
   const decorated = useMemo(()=> RECIPES.map(r=>{
     const m = makeability(r, matchSet);
@@ -1387,7 +1433,7 @@ function PlannerView({pantry, outOfStock, cooked}){
 
   // ===== Suggested next basket =====
   const priceIndex = useMemo(()=> buildPriceIndex(receipts), [receipts]);
-  const gapAnalysis = useMemo(()=> computeRegularsAndGaps(pantry, receipts, allergens, 3), [pantry, receipts, allergens]);
+  const gapAnalysis = useMemo(()=> computeRegularsAndGaps(pantry, receipts, allergens, 3, skuIndex), [pantry, receipts, allergens, skuIndex]);
   const nextDelivery = useMemo(()=> suggestNextDelivery(receipts), [receipts]);
 
   const basket = useMemo(()=>{
@@ -1404,16 +1450,32 @@ function PlannerView({pantry, outOfStock, cooked}){
 
     // Helper: build a basket-item entry from a name + reason + optional pantry context.
     // qtyHint: explicit suggested count (else falls back to typicalQty or 1).
+    //
+    // SKU resolution (Step 2 of basket automation): look up the item in
+    // tesco_skus and attach tesco_sku / tesco_url / khalil_critical to the
+    // returned entry. If no match is found, needs_sku_lookup=true is set so
+    // downstream steps (export button, Chrome handoff) can mark the item
+    // visibly rather than silently dropping it. Resolution is exact-match
+    // on the lowercased name; the seeding step used the same normalisation.
     const buildItem = (name, kind, why, whySub, qtyHint) => {
       const priced = lookupPriceForIngredient(name, priceIndex);
       const qty = qtyHint != null ? qtyHint : (priced && priced.typicalQty ? priced.typicalQty : 1);
       const unitPrice = priced ? priced.unitGbp : null;
       const totalPrice = unitPrice != null ? unitPrice * qty : null;
+      const skuRow = lookupSku(name, skuIndex);
       return {
         kind, name, why, whySub,
         qty, packSize: priced ? priced.packSize : null,
         unitPrice, totalPrice,
         priceSource: priced ? priced.source : null,
+        // Step 2 fields — present on every item; downstream UI/export logic
+        // reads these. tesco_sku and tesco_url are null when no SKU row
+        // matched; needs_sku_lookup makes that condition explicit for filters.
+        tesco_sku: skuRow ? skuRow.tesco_sku : null,
+        tesco_url: skuRow ? skuRow.tesco_url : null,
+        tesco_name: skuRow ? skuRow.tesco_name : null,
+        khalil_critical: skuRow ? !!skuRow.khalil_critical : false,
+        needs_sku_lookup: !skuRow,
       };
     };
 
@@ -1422,7 +1484,7 @@ function PlannerView({pantry, outOfStock, cooked}){
       .filter(p => !outOfStock.has(p.item))
       .map(p => ({ ...p, _dExp: daysUntilExpiry(p) }))
       .filter(p => p._dExp !== null && p._dExp <= expiryHorizon && p._dExp >= -3)
-      .filter(p => !neverRestockReason(p.item))
+      .filter(p => !neverRestockReason(p.item, skuIndex))
       .sort((a,b)=> a._dExp - b._dExp);
     for (const p of expiryRestock) {
       const key = lc(p.item);
@@ -1455,7 +1517,7 @@ function PlannerView({pantry, outOfStock, cooked}){
       if (!key || seen.has(key)) continue;
       const inPantry = pantry.some(p => lc(p.item).includes(key) || key.includes(lc(p.item)));
       if (inPantry && !outOfStock.has(lvName)) continue;
-      if (neverRestockReason(lvName)) continue;
+      if (neverRestockReason(lvName, skuIndex)) continue;
       seen.add(key);
       const unlockCount = lv.unlockedTo70 || lv.unlocks || 0;
       const mentionCount = lv.recipeCount || lv.mentions || 0;
@@ -1476,7 +1538,7 @@ function PlannerView({pantry, outOfStock, cooked}){
       leverage: items.filter(x => x.kind === "leverage").length,
     };
     return { items, total, priced: priced.length, unpriced, counts, daysToDelivery };
-  }, [gapAnalysis, leverage, pantry, outOfStock, priceIndex, nextDelivery]);
+  }, [gapAnalysis, leverage, pantry, outOfStock, priceIndex, nextDelivery, skuIndex]);
 
   return <div className="space-y-6">
     {expiring.length>0 && <Section title="Use these first — expiring ≤5 days" tone="warn" collapsible defaultOpen={false}
@@ -2341,8 +2403,29 @@ function khalilAllergenFlag(name, allergens){
 }
 
 // Household-rules: should this product be excluded from "restock" suggestions?
-function neverRestockReason(name){
+//
+// Two sources, checked in order:
+//   1. tesco_skus.household_rule_excluded (DB-driven, per-basket-key) — added
+//      in Step 2 of the basket automation. Authoritative when present because
+//      it's tied to a specific Tesco SKU rather than a regex pattern.
+//   2. HOUSEHOLD_RULES.never_restock patterns from RAW (regex on the name) —
+//      the original source, kept for backwards compatibility and for items
+//      not yet seeded into tesco_skus.
+//
+// Both filters apply to the basket-suggester (expiry / gap / leverage sources)
+// and to GapsView's "excluded" labelling. The skuIndex argument is optional
+// so existing callers don't break — they'll get the old regex-only behaviour
+// until they're updated to pass it through.
+function neverRestockReason(name, skuIndex){
   const n = (name||"").toLowerCase();
+  // 1) DB-driven: check tesco_skus for this exact basket_key.
+  if (skuIndex) {
+    const sku = lookupSku(name, skuIndex);
+    if (sku && sku.household_rule_excluded) {
+      return "household rule (SKU-level)";
+    }
+  }
+  // 2) Regex patterns from RAW.household_rules.
   for (const r of (HOUSEHOLD_RULES.never_restock||[])) {
     if (n.includes(r.pattern)) return r.reason;
   }
@@ -2476,7 +2559,7 @@ function suggestNextDelivery(receipts){
 // re-index into the receipts array to grab the latest order. Could return
 // `latest` directly and drop `latestIdx`. Deferred from 14.4 to avoid bundling
 // a shape change with the receipts-param refactor.
-function computeRegularsAndGaps(pantry, receipts, allergens, minOrders=3){
+function computeRegularsAndGaps(pantry, receipts, allergens, minOrders=3, skuIndex=null){
   const orders = receipts || [];
   if (!orders.length) return null;
   const latestIdx = orders.length - 1;
@@ -2513,7 +2596,7 @@ function computeRegularsAndGaps(pantry, receipts, allergens, minOrders=3){
     }
     if (!pantryItem) pantryItem = findPantryMatch(v.example);
     const allergen = khalilAllergenFlag(v.example, allergens);
-    const excluded = neverRestockReason(v.example);
+    const excluded = neverRestockReason(v.example, skuIndex);
     regulars.push({
       key, example: v.example, count, inLatest, lastSeenDate: v.lastSeenDate,
       pantryItem, allergen, excludedReason: excluded,
@@ -2529,6 +2612,10 @@ function GapsView({pantry, outOfStock}){
   // job is comparing pantry against order history, so this is the core input.
   const receipts = useContext(ReceiptsContext);
   const allergens = useContext(AllergensContext);
+  // SKU index from TescoSkusContext (Step 2 of basket automation). Passed
+  // into computeRegularsAndGaps so SKU-level household_rule_excluded entries
+  // surface in the "excluded" filter alongside the regex-pattern rules.
+  const skuIndex = useContext(TescoSkusContext);
   const [minOrders, setMinOrders] = useState(3);
   const [filter, setFilter] = useState("gap"); // gap | all | restocked | excluded
   const [leverageLimit, setLeverageLimit] = useState(15);
@@ -2563,7 +2650,7 @@ function GapsView({pantry, outOfStock}){
   }, [pantry, outOfStock, leverageLimit, allergens]);
 
   const analysis = useMemo(()=>{
-    const base = computeRegularsAndGaps(pantry, receipts, allergens, minOrders);
+    const base = computeRegularsAndGaps(pantry, receipts, allergens, minOrders, skuIndex);
     if (!base) return null;
     const latest = receipts[base.latestIdx];
     const restocked = base.regulars.filter(r => r.inLatest || r.pantryItem);
@@ -2577,7 +2664,7 @@ function GapsView({pantry, outOfStock}){
       restocked,
       excluded,
     };
-  }, [pantry, receipts, allergens, minOrders]);
+  }, [pantry, receipts, allergens, minOrders, skuIndex]);
 
   if (!analysis) {
     return <div className="card p-4 text-sm text-stone-500">
@@ -2801,8 +2888,8 @@ function AuditView({pantry}){
     <div className="text-xs text-stone-600 bg-stone-50 border border-stone-200 rounded-lg px-3 py-2">
       <strong>Library health check.</strong> Quick stats about the recipe library and pantry coverage — useful for spotting gaps in the data (missing tags, untagged recipes, manifest mismatches) rather than gaps in your basket.
     </div>
-    <Section title="Workflow integrity" subtitle="Health check — green means all good, amber means a small fix is needed" tone="ok"
-      tip="Each card reports on one data-quality dimension: are all recipes tagged with an audience, are all pantry items tagged with an allergen flag, etc. Status chip on each card: ✓ OK = nothing to do, ⚠ Fix needed = small repair recommended, ⚠ Critical action needed = fix before relying on this data.">
+    <Section title="Workflow integrity" subtitle="Snapshot of how complete the structured data is" tone="ok"
+      tip="Each card reports on one quality dimension: are all recipes tagged with an audience, are all pantry items tagged with an allergen flag, etc. Green = OK, amber = a small fix needed.">
       <div className="grid sm:grid-cols-2 gap-3 text-sm">
         <GapCard label="Recipes with audience tag" value={taggedRecipes} of={RECIPES.length} severity={untagged > 0 ? "medium":"low"}
                  note={untagged > 0 ? `${untagged} recipes still untagged — re-import the patched files in /project-updates/.` : "All recipes now carry audience + eaters tags."}/>
@@ -2852,16 +2939,13 @@ function AuditView({pantry}){
 }
 function GapCard({label, value, of, severity, note}){
   const tone = severity==="high"?"danger":severity==="medium"?"warn":"ok";
-  const sevLabel = severity==="high" ? "⚠ Critical action needed"
-    : severity==="medium" ? "⚠ Fix needed"
-    : "✓ OK";
-  const sevTitle = severity==="high" ? "Critical — fix before relying on this data"
-    : severity==="medium" ? "Small fix recommended"
-    : "All good — no action needed";
+  const sevTitle = severity==="high" ? "High severity — fix before relying on this data"
+    : severity==="medium" ? "Medium severity — small fix recommended"
+    : "Low severity — all good";
   return <div className="card p-3">
     <div className="flex items-start justify-between gap-2 mb-1">
       <div className="font-medium text-sm leading-snug">{label}</div>
-      <Chip tone={tone} title={sevTitle}>{sevLabel}</Chip>
+      <Chip tone={tone} title={sevTitle}>{severity}</Chip>
     </div>
     <div className="mono text-xs text-stone-500 mb-1.5">{value}{of!==undefined && of!=="—" ? ` / ${of}`:""}</div>
     <div className="text-xs text-stone-600 leading-snug">{note}</div>
@@ -2890,6 +2974,14 @@ function App(){
   // window is ~100ms in practice; for a longer-term solution we'd seed
   // from localStorage like pantry does.
   const [allergens, setAllergens] = useState(EMPTY_ALLERGENS);
+  // Tesco SKU index: Map<basket_key, sku-row>. Fetched from tesco_skus on
+  // boot (Step 2 of basket automation). Consumed via TescoSkusContext by
+  // PlannerView (basket suggestion) and GapsView (excluded labelling). Empty
+  // Map default so consumers don't crash before the fetch lands — items
+  // will surface with needs_sku_lookup=true until the data arrives, which
+  // is intentional: Step 3 will render that as a visible warning chip
+  // rather than silently dropping the item.
+  const [skuIndex, setSkuIndex] = useState(new Map());
   // recipesLoaded triggers a re-render once the module-level RECIPES
   // array has been populated (it's read directly by many components).
   const [recipesLoaded, setRecipesLoaded] = useState(false);
@@ -2927,12 +3019,13 @@ function App(){
     let cancelled = false;
     (async () => {
       try {
-        const [pantryRows, recipeRows, cookedRows, receiptRows, allergenRows] = await Promise.all([
+        const [pantryRows, recipeRows, cookedRows, receiptRows, allergenRows, skuRows] = await Promise.all([
           fetchPantry(),
           fetchRecipes(),
           fetchCookedLog().catch(() => []), // cooked_log is empty / may not have read perms
           fetchReceipts().catch((e) => { console.warn("fetchReceipts failed:", e); return []; }),
           fetchHouseholdAllergens().catch((e) => { console.warn("fetchHouseholdAllergens failed:", e); return []; }),
+          fetchTescoSkus().catch((e) => { console.warn("fetchTescoSkus failed:", e); return []; }),
         ]);
         if (cancelled) return;
         const mappedPantry = pantryRows.map(mapPantryRow);
@@ -2977,6 +3070,16 @@ function App(){
           setAllergens(buildAllergensConfig(allergenRows));
         } else {
           console.warn("Allergens fetch returned no rows — flagging will be disabled.");
+        }
+
+        // SKU index: build the Map from tesco_skus rows. An empty result is
+        // valid (the table might not be seeded yet, or fetch may have failed
+        // and returned [] via the catch above) — consumers fall back to
+        // needs_sku_lookup=true per item, which Step 3 surfaces visually.
+        if (skuRows && skuRows.length) {
+          setSkuIndex(buildSkuIndex(skuRows));
+        } else {
+          console.warn("Tesco SKU fetch returned no rows — basket items will show needs_sku_lookup.");
         }
 
         // Merge any server-side cooked log with local cooked log,
@@ -3338,6 +3441,7 @@ function App(){
 
   return <ReceiptsContext.Provider value={receipts}>
   <AllergensContext.Provider value={allergens}>
+  <TescoSkusContext.Provider value={skuIndex}>
   <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-10">
     <header className="flex flex-wrap items-end justify-between gap-3 mb-4">
       <div>
@@ -3398,6 +3502,7 @@ function App(){
       </details>
     </footer>
   </div>
+  </TescoSkusContext.Provider>
   </AllergensContext.Provider>
   </ReceiptsContext.Provider>;
 }
