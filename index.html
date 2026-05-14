@@ -105,9 +105,15 @@ const { useState, useMemo, useEffect, useCallback, useRef, createContext, useCon
 // (2) only apply changes not already listed, (3) append a new
 // entry below describing what they changed.
 // ============================================================
-const SITE_VERSION = "2026-05-14.12";
+const SITE_VERSION = "2026-05-14.13";
 const SITE_CHANGELOG = [
   // newest first
+  { version: "2026-05-14.13", date: "2026-05-14", changes: [
+    "**Legend strip removed.** The persistent legend row below the tab nav (5 colour swatches + 3 emoji audience tags) was deleted entirely. For a single-user dashboard where the operator wrote the colour system, the legend was teaching information the user can't *not* already know, and was duplicating content already present in chip tooltips. The §2 audit had flagged it as 'two parallel visual systems' and 'mostly noise' — this is the cut. `<LegendStrip/>` removed from App; component function removed; CSS classes (`.legend-strip`, `.lkey`, `.sw`) left as dead code for one commit (small, may be reused if a context-aware variant is ever needed). Net effect: ~30px of vertical space reclaimed on every tab, actual content moves up.",
+    "**Gaps tab: blurb rewritten as intro + bullets.** The 'What this view does' paragraph was a dense three-sentence run-on that hid four distinct ideas inside it. Reformatted to a one-line intro ('Spots items you buy regularly but don't currently have') followed by four bullets: what counts as a regular, the two checks (vs latest delivery + vs pantry), what counts as a gap, and what gets filtered out by household rules. Same content, ~40% faster to parse.",
+    "**Gaps tab: regulars/gaps table now sortable.** Columns `×` (count), `Item`, `Last seen`, and `Status` are click-to-sort. Same SortHeader component as the Pantry table (shipped in 14.12). Defaults to `count desc` to match the implicit rank order from computeRegularsAndGaps. Sort defaults flip with column type: numeric/date columns default-desc on first click (most-recent / highest-count first), string column (Item) defaults-asc. Status ordering: gap → in latest → in pantry → excluded.",
+    "**Gaps tab: leverage table now sortable.** `Ingredient`, `Recipes`, `Avg boost`, `→70%` are sortable. The `#` column reflects display order (re-numbers on sort change) rather than a stable rank — kept as plain text since 'sort by rank' would be redundant with 'sort by recipeCount desc'. Defaults to `recipes desc` (matches the existing rank order from leverageScore). Sort state lives inside LeverageTileGrid, so the same behaviour appears on both callsites — the Planner 'Unlock the most recipes' section and the Gaps 'Ingredients that unlock the most recipes' section both benefit.",
+  ]},
   { version: "2026-05-14.12", date: "2026-05-14", changes: [
     "**Pantry table: sortable columns + tooltip clipping fix.** Two related fixes on the Pantry tab. (1) The Conf and Khalil column-header tooltips were rendering but invisible — the bubble pops above its trigger (`bottom: calc(100% + 6px)`), but the table header sits at the top of a `card overflow-hidden` container, so the bubble escaped the card's bounds and got clipped. Added a `.below` CSS variant that flips the bubble to render *below* the trigger (`top: calc(100% + 6px)`, arrow inverted), and switched the two header InfoTips to `align=\"below\"` / `align=\"below-right\"`. The bubble now renders downward into the table body region — still inside the card, so no clipping. (2) Made the Item / Category / Qty / Conf / Expires / Khalil columns sortable. Click a header to toggle: first click → asc, second click → desc, third click → reset to default (Item asc). The active column shows a small ▲/▼ chevron.",
     "Sort comparator details: numeric for Qty, Conf, and Expires (Qty parses the leading number from strings like '500g' → 500); string with `localeCompare` for Item and Category; ordinal for Khalil (son_allergen < check < household_safe — sorts dangerous-first in asc). Null expiry dates always sink to the bottom of asc (no date = no urgency). Out-of-stock rows always go to the very bottom regardless of sort direction or column — sorting them inline would create a noisy band of struck-through items in the middle of the list. Ties break on item name asc.",
@@ -895,19 +901,6 @@ function HelpBanner({ onDismiss }){
     </div>
   </div>;
 }
-function LegendStrip(){
-  return <div className="legend-strip flex flex-wrap items-center mb-5 -mt-2">
-    <span className="mr-2 font-medium text-stone-600">Legend:</span>
-    <span className="lkey"><span className="sw" style={{background:"#16a34a"}}/>safe / good</span>
-    <span className="lkey"><span className="sw" style={{background:"#d97706"}}/>warn / check</span>
-    <span className="lkey"><span className="sw" style={{background:"#dc2626"}}/>blocked / overdue</span>
-    <span className="lkey"><span className="sw" style={{background:"#2563eb"}}/>info / adults-only</span>
-    <span className="lkey"><span className="sw" style={{background:"#7c3aed"}}/>accent / leverage</span>
-    <span className="lkey">✅ whole-household</span>
-    <span className="lkey">👨‍👩 adults only</span>
-    <span className="lkey">⚠️ check label</span>
-  </div>;
-}
 function Chip({tone="neutral", children, title}){
   const map = {
     neutral:"bg-stone-50 text-stone-700",
@@ -1578,18 +1571,44 @@ function RecipeMicroList({items}){
 // Uses the same numbered/ranked layout as the Gaps tab for consistency.
 function LeverageTileGrid({items}){
   const [open, setOpen] = useState(null);
+  // Sort state. Default to recipeCount desc, matching the rank order returned by
+  // leverageScore (most-impactful ingredients first). The # column reflects current
+  // display order so it re-numbers after a sort change.
+  const [sortBy, setSortBy] = useState("recipes");
+  const [sortDir, setSortDir] = useState("desc");
+  const toggleSort = (key) => {
+    if (sortBy !== key) { setSortBy(key); setSortDir(key==="ingredient"?"asc":"desc"); return; }
+    if (sortDir === "asc") { setSortDir("desc"); return; }
+    setSortBy("recipes"); setSortDir("desc");
+  };
+  const sortedItems = useMemo(() => {
+    if (!items || !items.length) return items || [];
+    const arr = [...items].sort((a, b) => {
+      let cmp = 0;
+      switch (sortBy) {
+        case "ingredient": cmp = lc(a.ingredient||"").localeCompare(lc(b.ingredient||"")); break;
+        case "recipes": cmp = (a.recipeCount||0) - (b.recipeCount||0); break;
+        case "boost": cmp = (a.avgBoost||0) - (b.avgBoost||0); break;
+        case "to70": cmp = (a.unlockedTo70||0) - (b.unlockedTo70||0); break;
+        default: cmp = 0;
+      }
+      if (cmp === 0) cmp = (b.recipeCount||0) - (a.recipeCount||0); // tiebreaker
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+    return arr;
+  }, [items, sortBy, sortDir]);
   if (!items || !items.length) return <div className="text-sm text-stone-500">No leverage opportunities right now.</div>;
   return <div className="card overflow-hidden">
     <div className="px-3 py-2 border-b border-stone-200 bg-stone-50 text-[11px] uppercase tracking-wider text-stone-500 grid grid-cols-12 gap-2">
       <div className="col-span-1 text-right">#</div>
-      <div className="col-span-5">Ingredient</div>
-      <div className="col-span-2 text-right" title="How many recipes in the library use this ingredient">Recipes</div>
-      <div className="col-span-2 text-right" title="Average makeability % boost across affected recipes if you added this ingredient">Avg boost</div>
-      <div className="col-span-1 text-right" title="How many recipes are pushed to ≥70% makeable if you add just this one ingredient">→70%</div>
+      <SortHeader colSpan={5} sortKey="ingredient" sortBy={sortBy} sortDir={sortDir} onClick={toggleSort}>Ingredient</SortHeader>
+      <SortHeader colSpan={2} sortKey="recipes" sortBy={sortBy} sortDir={sortDir} onClick={toggleSort} align="right">Recipes</SortHeader>
+      <SortHeader colSpan={2} sortKey="boost" sortBy={sortBy} sortDir={sortDir} onClick={toggleSort} align="right">Avg boost</SortHeader>
+      <SortHeader colSpan={1} sortKey="to70" sortBy={sortBy} sortDir={sortDir} onClick={toggleSort} align="right">→70%</SortHeader>
       <div className="col-span-1"/>
     </div>
     <div className="divide-y divide-stone-100">
-      {items.map((l,i)=> {
+      {sortedItems.map((l,i)=> {
         const isOpen = open === l.key;
         const recipes = l.unlockedRecipes || [];
         return <div key={l.key || i} className={isOpen?"bg-stone-50":""}>
@@ -2440,6 +2459,15 @@ function GapsView({pantry, outOfStock}){
   const [minOrders, setMinOrders] = useState(3);
   const [filter, setFilter] = useState("gap"); // gap | all | restocked | excluded
   const [leverageLimit, setLeverageLimit] = useState(15);
+  // Regulars/gaps table sort. Defaults to count desc (most-frequent regulars first)
+  // which matches the implicit ranking computeRegularsAndGaps returns.
+  const [regSortBy, setRegSortBy] = useState("count");
+  const [regSortDir, setRegSortDir] = useState("desc");
+  const toggleRegSort = (key) => {
+    if (regSortBy !== key) { setRegSortBy(key); setRegSortDir(key==="item"?"asc":"desc"); return; }
+    if (regSortDir === "asc") { setRegSortDir("desc"); return; }
+    setRegSortBy("count"); setRegSortDir("desc");
+  };
 
   // Leverage: ingredients that unlock the most blocked recipes
   const leverage = useMemo(()=>{
@@ -2476,10 +2504,38 @@ function GapsView({pantry, outOfStock}){
     </div>;
   }
 
-  const visible = filter === "gap" ? analysis.gaps
+  const visibleRaw = filter === "gap" ? analysis.gaps
                 : filter === "restocked" ? analysis.restocked
                 : filter === "excluded" ? analysis.excluded
                 : analysis.regulars;
+  // Status sort order: gap (most actionable) → in latest → in pantry → excluded.
+  const statusOrd = (r) => {
+    if (r.excludedReason) return 3;
+    if (r.inLatest) return 1;
+    if (r.pantryItem) return 2;
+    return 0; // gap
+  };
+  const visible = useMemo(() => {
+    const sorted = [...visibleRaw].sort((a, b) => {
+      let cmp = 0;
+      switch (regSortBy) {
+        case "count": cmp = (a.count||0) - (b.count||0); break;
+        case "item": cmp = lc(a.example||"").localeCompare(lc(b.example||"")); break;
+        case "lastSeen":
+          // Null lastSeen sinks to bottom of asc.
+          if (!a.lastSeenDate && !b.lastSeenDate) cmp = 0;
+          else if (!a.lastSeenDate) cmp = 1;
+          else if (!b.lastSeenDate) cmp = -1;
+          else cmp = new Date(a.lastSeenDate) - new Date(b.lastSeenDate);
+          break;
+        case "status": cmp = statusOrd(a) - statusOrd(b); break;
+        default: cmp = 0;
+      }
+      if (cmp === 0) cmp = lc(a.example||"").localeCompare(lc(b.example||"")); // tiebreaker
+      return regSortDir === "asc" ? cmp : -cmp;
+    });
+    return sorted;
+  }, [visibleRaw, regSortBy, regSortDir]);
 
   return <div className="space-y-5">
     <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
@@ -2501,10 +2557,14 @@ function GapsView({pantry, outOfStock}){
     <Section title="What this view does · pick your basket gaps" tone="info" collapsible
       tip="Compares the items you buy most often against what you currently have. Filters by category below.">
       <p className="text-sm text-stone-700 leading-relaxed">
-        Looks at <strong>items you buy regularly</strong> (appearing in {minOrders}+ of {analysis.orderCount} orders) and checks each one against
-        (a) your latest Tesco delivery and (b) the current pantry snapshot. Items missing from both are <strong>likely real gaps</strong> —
-        usually fresh produce or fast-moving staples. Items matching <strong>household never-restock rules</strong> (e.g. dairy milk — no one drinks it) are filtered out separately so they don't keep appearing as 'gaps'.
+        Spots items you buy regularly but don't currently have — so they're candidates for your next basket.
       </p>
+      <ul className="text-sm text-stone-700 leading-relaxed mt-2 space-y-1 list-disc pl-5">
+        <li><strong>Regulars</strong> = items appearing in {minOrders}+ of {analysis.orderCount} orders.</li>
+        <li>Each regular is checked against (a) your <strong>latest Tesco delivery</strong> and (b) the <strong>current pantry</strong>.</li>
+        <li>If it's missing from both, it's a <strong>likely gap</strong> — usually fresh produce or fast-moving staples.</li>
+        <li>Items matching a <strong>household never-restock rule</strong> (e.g. dairy milk — no one drinks it) are filtered out so they don't keep appearing.</li>
+      </ul>
       <div className="flex flex-wrap items-center gap-3 mt-3 mb-4">
         <label className="text-sm flex items-center gap-2">
           <span className="text-stone-500">Min orders:</span>
@@ -2548,10 +2608,10 @@ function GapsView({pantry, outOfStock}){
         {visible.length === 0 ? <div className="text-sm text-stone-500">Nothing here at this threshold.</div>
         : <div className="card overflow-hidden">
           <div className="px-3 py-2 border-b border-stone-200 bg-stone-50 text-[11px] uppercase tracking-wider text-stone-500 grid grid-cols-12 gap-2">
-            <div className="col-span-1 text-center" title="How many orders this item appeared in">×</div>
-            <div className="col-span-6">Item</div>
-            <div className="col-span-2">Last seen</div>
-            <div className="col-span-3 text-right">Status</div>
+            <SortHeader colSpan={1} sortKey="count" sortBy={regSortBy} sortDir={regSortDir} onClick={toggleRegSort} align="center">×</SortHeader>
+            <SortHeader colSpan={6} sortKey="item" sortBy={regSortBy} sortDir={regSortDir} onClick={toggleRegSort}>Item</SortHeader>
+            <SortHeader colSpan={2} sortKey="lastSeen" sortBy={regSortBy} sortDir={regSortDir} onClick={toggleRegSort}>Last seen</SortHeader>
+            <SortHeader colSpan={3} sortKey="status" sortBy={regSortBy} sortDir={regSortDir} onClick={toggleRegSort} align="right">Status</SortHeader>
           </div>
           <div className="divide-y divide-stone-100">
             {visible.map((r,i)=> <div key={i} className="grid grid-cols-12 gap-2 items-center px-3 py-2 text-sm">
@@ -3223,8 +3283,6 @@ function App(){
       )}
     </div>
     {currentTabMeta && <div className="tab-subtitle">{currentTabMeta[2]}</div>}
-
-    <LegendStrip/>
 
     {tab==="planner" && <PlannerView pantry={pantry} outOfStock={outOfStock} cooked={cooked}/>}
     {tab==="recipes" && <RecipesView pantry={pantry} outOfStock={outOfStock} cooked={cooked} addCooked={addCooked} eaterFilter={eaterFilter} setEaterFilter={setEaterFilter} cookedSyncErrors={cookedSyncErrors}/>}
