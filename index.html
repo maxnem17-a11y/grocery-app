@@ -90,9 +90,14 @@ const { useState, useMemo, useEffect, useCallback, useRef, createContext, useCon
 // (2) only apply changes not already listed, (3) append a new
 // entry below describing what they changed.
 // ============================================================
-const SITE_VERSION = "2026-05-14.6";
+const SITE_VERSION = "2026-05-14.7";
 const SITE_CHANGELOG = [
   // newest first
+  { version: "2026-05-14.7", date: "2026-05-14", changes: [
+    "**Mobile qty edits no longer lost on refresh.** Reported symptom: tap +/- on a pantry item on mobile, refresh the page, the change is gone. Root cause: the qty PATCH was debounced 500ms (added in 14.1 to coalesce rapid taps). If you refresh, swipe back, or background the app within that window, the setTimeout is killed before the PATCH fires. localStorage looks correct on first paint (the autosave useEffect ran synchronously), but the boot fetch then overwrites the local seed with the stale server value. Mobile hits this far more than desktop because iOS Safari pauses JS timers on app-switch and pull-to-refresh, and tap-then-refresh on mobile is faster than 500ms.",
+    "Fix: dropped debounce window from 500ms → 150ms (still coalesces a rapid burst of +++ taps but doesn't sit on writes long enough to lose them in normal use), and added a `pagehide` + `visibilitychange→hidden` flush handler that synchronously fires any pending qty PATCH with `fetch({ keepalive: true })`. `keepalive` is the standard mobile pattern — tells the browser to complete the request even if the page is unloading. Per-item pending values are tracked in the existing `pendingQtyValues` ref so the flush knows what to send without reading React state.",
+    "Symmetric path (out_of_stock toggle) was already immediate-write — no debounce — so it didn't have this bug and didn't need a fix.",
+  ]},
   { version: "2026-05-14.6", date: "2026-05-14", changes: [
     "**Mobile white-screen hotfix.** After 14.5 shipped, the app booted to a white screen on mobile (desktop fine). Cause: PlannerView's `gapAnalysis` useMemo at line 1168 was still calling `computeRegularsAndGaps(pantry, receipts, 3)` — the old 3-arg signature from pre-14.5. The function picked up `allergens=3` (a number, truthy) instead of the config object, slipped past the `allergens || EMPTY_ALLERGENS` fallback, then threw `TypeError: Cannot read properties of undefined (reading 'blockByCategory')` inside khalilAllergenFlag. No Error Boundary in the tree → whole subtree unmounted → white screen. Desktop probably escaped because of fetch-order timing (receipts empty on first render → function early-returns null at the `if (!orders.length)` guard, never reaches the bad line). Fixed the call site to pass `allergens` and include it in the deps array.",
     "**Defensive shape-check in flagsForRecipe and khalilAllergenFlag.** Both functions now validate the `allergens` arg is actually a config object (`typeof === 'object' && .khalil`) before reading from it, instead of just truthy-checking. The original `allergens || EMPTY_ALLERGENS` pattern only caught nullish — a number or string slipped through and crashed. Future arg-order slips will now degrade to 'treat as Khalil-safe' (visible bug) rather than white-screening (invisible bug).",
@@ -2931,8 +2936,73 @@ function App(){
           pendingQtyValues.current[itemName] = prevSaved;
           setItemSyncError(itemName, "Couldn't save — tap again to retry");
         });
-    }, 500);
+    }, 150);
   }, [qtyAdjustments, findRowByItem, setItemSyncError]);
+
+  // Flush any pending debounced qty PATCHes synchronously on page hide. The
+  // 150ms debounce in adjustQty coalesces rapid +/- taps into one network
+  // call, but if the user refreshes / backgrounds the app inside that 150ms
+  // window the setTimeout is killed before it fires — Supabase never sees
+  // the write, and the next boot fetch wipes the local optimistic update.
+  // Especially likely on mobile, where iOS Safari pauses JS timers on
+  // app-switch and pull-to-refresh.
+  //
+  // Fix: on `pagehide` (the canonical "page is going away" event, fires on
+  // refresh + tab close + iOS background) and `visibilitychange→hidden`,
+  // synchronously flush every pending value using fetch({keepalive: true}).
+  // `keepalive` tells the browser to complete the request even after the
+  // page unloads — purpose-built for this.
+  //
+  // Note: this is fire-and-forget. We can't observe success/failure since
+  // the page is going away. The next boot fetch is our verification —
+  // if the PATCH landed, the row will reflect it; if it didn't, the
+  // localStorage seed has the latest value and the user can re-tap.
+  useEffect(() => {
+    const flush = () => {
+      const pending = pendingQtyValues.current;
+      const items = Object.keys(pending);
+      if (!items.length) return;
+      for (const itemName of items) {
+        const newVal = pending[itemName];
+        const row = (pantryRef.current || []).find(p => p.item === itemName);
+        if (!row || !row.id) continue;
+        // Cancel any in-flight debounced setTimeout for this item so it
+        // doesn't fire a duplicate PATCH if the page actually survives
+        // (e.g. visibilitychange→hidden→visible without a real unload).
+        clearTimeout(qtyDebounceTimers.current[itemName]);
+        try {
+          fetch(`${SUPABASE.url}/rest/v1/pantry_items?id=eq.${row.id}`, {
+            method: "PATCH",
+            headers: {
+              apikey: SUPABASE.anonKey,
+              Authorization: `Bearer ${SUPABASE.anonKey}`,
+              "Content-Type": "application/json",
+              Prefer: "return=minimal",
+            },
+            body: JSON.stringify({ qty_adjustment: newVal }),
+            keepalive: true,
+          });
+        } catch (e) {
+          // Nothing useful to do here — the page is unloading. The local
+          // optimistic state is in localStorage; user re-taps on next visit
+          // if needed.
+          console.warn(`Flush PATCH for "${itemName}" failed:`, e);
+        }
+      }
+      // Don't clear pendingQtyValues — if the page survives (visibilitychange
+      // path), the in-memory debounce machinery will overwrite anyway, and
+      // if it doesn't survive, the ref dies with the page.
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") flush();
+    };
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, []);
 
   const exportAll = () => {
     const blob = new Blob([JSON.stringify({
