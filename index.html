@@ -75,6 +75,13 @@
   /* Right-anchored variant for tips near the right edge */
   .infotip-bubble.right{ left:auto; right:0; transform:none; }
   .infotip-bubble.right::after{ left:auto; right:6px; transform:none; }
+  /* Below-anchored variant for tips inside overflow-hidden containers (e.g. table headers).
+     The default bubble pops above the trigger and gets clipped by ancestor overflow:hidden;
+     this variant flips it below the trigger and re-positions the arrow accordingly. */
+  .infotip-bubble.below{ bottom:auto; top:calc(100% + 6px); }
+  .infotip-bubble.below::after{ top:auto; bottom:100%; border-top-color:transparent; border-bottom-color:#1c1c1c; }
+  .infotip-bubble.below.right::after{ left:auto; right:6px; transform:none; }
+  .infotip-bubble.below:not(.right)::after{ left:50%; transform:translateX(-50%); }
   /* Help-banner card */
   .help-banner{ background:linear-gradient(135deg, #f0f9ff 0%, #ecfdf5 100%); border:1px solid #bae6fd; }
   .help-banner h2{ font-size:.95rem; font-weight:600; color:#0c4a6e; }
@@ -98,9 +105,15 @@ const { useState, useMemo, useEffect, useCallback, useRef, createContext, useCon
 // (2) only apply changes not already listed, (3) append a new
 // entry below describing what they changed.
 // ============================================================
-const SITE_VERSION = "2026-05-14.11";
+const SITE_VERSION = "2026-05-14.12";
 const SITE_CHANGELOG = [
   // newest first
+  { version: "2026-05-14.12", date: "2026-05-14", changes: [
+    "**Pantry table: sortable columns + tooltip clipping fix.** Two related fixes on the Pantry tab. (1) The Conf and Khalil column-header tooltips were rendering but invisible — the bubble pops above its trigger (`bottom: calc(100% + 6px)`), but the table header sits at the top of a `card overflow-hidden` container, so the bubble escaped the card's bounds and got clipped. Added a `.below` CSS variant that flips the bubble to render *below* the trigger (`top: calc(100% + 6px)`, arrow inverted), and switched the two header InfoTips to `align=\"below\"` / `align=\"below-right\"`. The bubble now renders downward into the table body region — still inside the card, so no clipping. (2) Made the Item / Category / Qty / Conf / Expires / Khalil columns sortable. Click a header to toggle: first click → asc, second click → desc, third click → reset to default (Item asc). The active column shows a small ▲/▼ chevron.",
+    "Sort comparator details: numeric for Qty, Conf, and Expires (Qty parses the leading number from strings like '500g' → 500); string with `localeCompare` for Item and Category; ordinal for Khalil (son_allergen < check < household_safe — sorts dangerous-first in asc). Null expiry dates always sink to the bottom of asc (no date = no urgency). Out-of-stock rows always go to the very bottom regardless of sort direction or column — sorting them inline would create a noisy band of struck-through items in the middle of the list. Ties break on item name asc.",
+    "Added `SortHeader` component (between InfoTip and HelpBanner) — renders a clickable column header with the active-sort chevron, keyboard-accessible (Enter/Space). InfoTip got an internal `stopPropagation` so clicking the ⓘ inside a sortable header doesn't accidentally trigger a sort.",
+    "Backlog: same sortable pattern is a candidate for the Recipes list and the Order history tables. Not done in this commit — focused on the Pantry tab where the column count is fixed and the user complaint was direct.",
+  ]},
   { version: "2026-05-14.11", date: "2026-05-14", changes: [
     "**Stale UI text + dead buttons cleanup.** The dashboard had accumulated several footer/tooltip strings from the pre-Supabase era (before 14.1/14.2/14.5) that told users to 'paste cooked log back into a Claude session for canonical pantry updates' and described pantry data as coming 'from a snapshot.' All untrue since the migrations — writes go straight to Supabase and sync across devices. These strings were actively misleading: a user asked what 'snapshot 2026-05-11' in the footer meant, and the honest answer was 'nothing, it's a hardcoded fossil.'",
     "Footer line: rewritten from 'State saved locally in your browser ✓ · paste cooked log back into a Claude session for canonical pantry updates' to 'Synced to Supabase ✓ across devices'. The local storage check (STORAGE_OK) still flips the tick to a cross if browser storage is unavailable — that's still meaningful as a first-paint cache health indicator.",
@@ -825,11 +838,41 @@ function leverageScore(recipes, matchSet, limit){
 // ===== UI =====
 function InfoTip({ children, align="center" }){
   // children = the explanatory text. Renders a small ⓘ icon; reveals on hover/focus.
-  return <span className="infotip">
-    <button type="button" tabIndex={0} className="infotip-trigger" aria-label="More info">i</button>
-    <span className={"infotip-bubble"+(align==="right"?" right":"")} role="tooltip">{children}</span>
+  // align: "center" (default, bubble above & centered), "right" (above, right-anchored),
+  // "below" (below & centered — use inside overflow-hidden containers like table headers),
+  // "below-right" (below & right-anchored — for tips in the rightmost columns).
+  // stopPropagation on click/keyDown so the trigger doesn't fire parent click handlers
+  // (e.g. when nested inside a sortable column header — clicking the ⓘ should NOT sort).
+  const cls = "infotip-bubble"
+    + (align==="right" ? " right" : "")
+    + (align==="below" ? " below" : "")
+    + (align==="below-right" ? " below right" : "");
+  const stop = (e) => { e.stopPropagation(); };
+  return <span className="infotip" onClick={stop} onKeyDown={stop}>
+    <button type="button" tabIndex={0} className="infotip-trigger" aria-label="More info" onClick={stop}>i</button>
+    <span className={cls} role="tooltip">{children}</span>
   </span>;
 }
+// Sortable column header for the pantry table. Click to toggle sort direction;
+// shows a small ▲/▼ chevron when this column is the active sort. The default Item
+// column starts as asc; a third click on the same column resets the table to the
+// default (Item asc) — handled by the toggleSort fn in PantryView.
+function SortHeader({ colSpan, sortKey, sortBy, sortDir, onClick, align="left", children }){
+  const active = sortBy === sortKey;
+  const justify = align==="center" ? "justify-center" : align==="right" ? "justify-end" : "justify-start";
+  const chevron = active ? (sortDir === "asc" ? "▲" : "▼") : "";
+  return <div
+    className={`col-span-${colSpan} flex items-center gap-1 cursor-pointer select-none hover:text-stone-700 ${justify}`}
+    onClick={()=>onClick(sortKey)}
+    role="button" tabIndex={0}
+    onKeyDown={(e)=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); onClick(sortKey); } }}
+    title={active ? `Sorted ${sortDir==="asc"?"ascending":"descending"} — click to ${sortDir==="asc"?"reverse":"reset"}` : "Click to sort"}
+  >
+    {children}
+    {active && <span className="text-stone-700 text-[9px]">{chevron}</span>}
+  </div>;
+}
+
 function HelpBanner({ onDismiss }){
   return <div className="help-banner rounded-xl p-4 mb-4">
     <div className="flex items-start justify-between gap-3">
@@ -925,6 +968,17 @@ function Section({title, subtitle, tone, children, collapsible=false, defaultOpe
 function PantryView({pantry, outOfStock, toggleOutOfStock, qtyAdjustments, adjustQty, syncErrors}){
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState("all");
+  // Sortable columns. Click a header to toggle: first click → asc, second click → desc,
+  // third click → reset to default (item asc). Out-of-stock rows are always sunk to the
+  // bottom regardless of sort direction so they don't pollute the top of the list.
+  const [sortBy, setSortBy] = useState("item");
+  const [sortDir, setSortDir] = useState("asc");
+  const toggleSort = (key) => {
+    if (sortBy !== key) { setSortBy(key); setSortDir("asc"); return; }
+    if (sortDir === "asc") { setSortDir("desc"); return; }
+    // Third click on the same column: reset to default
+    setSortBy("item"); setSortDir("asc");
+  };
   // Format qty string + integer delta into a display value. Tries to update the numeric
   // portion of "500g" → "400g" when delta=-1 and step inferred… but step inference is
   // ambiguous, so we instead show: base qty + " (±N)" indicator when delta is non-zero.
@@ -943,7 +997,7 @@ function PantryView({pantry, outOfStock, toggleOutOfStock, qtyAdjustments, adjus
     const delta = qtyAdjustments[p.item] || 0;
     return {...p, _conf:conf, _dExp:dExp, _flag:flag, _out: outOfStock.has(p.item), _delta: delta, _syncErr: (syncErrors||{})[p.item] || null};
   }), [pantry, outOfStock, qtyAdjustments, syncErrors]);
-  const filtered = rows.filter(r => {
+  const filteredRaw = rows.filter(r => {
     if (q && !lc(r.item).includes(lc(q))) return false;
     if (filter==="expiring") return r._dExp!==null && r._dExp <= 5 && !r._out;
     if (filter==="low") return r._conf < 30 && !r._out;
@@ -951,6 +1005,39 @@ function PantryView({pantry, outOfStock, toggleOutOfStock, qtyAdjustments, adjus
     if (filter==="out") return r._out;
     return true;
   });
+  // Sort comparator: numeric for qty/conf/expiry, string for item/category, ordinal for
+  // Khalil allergen (son_allergen=0, check=1, household_safe=2). Out-of-stock rows always
+  // sink to bottom — they're filtered visually (line-through, opacity 40) and sorting
+  // them inline would create a noisy mid-list of struck-through items.
+  const allergenOrd = (flag) => flag==="son_allergen" ? 0 : flag==="check" ? 1 : 2;
+  // Parse qty string to a number for sorting ("500g" → 500, "2" → 2, "—" → NaN sinks).
+  // Falls back to 0 for non-numeric strings so they sort together at the bottom of asc.
+  const qtyNum = (q) => { const m = String(q||"").match(/-?\d+(\.\d+)?/); return m ? parseFloat(m[0]) : 0; };
+  const filtered = useMemo(() => {
+    const sorted = [...filteredRaw].sort((a, b) => {
+      // Out-of-stock always last, regardless of sort dir
+      if (a._out !== b._out) return a._out ? 1 : -1;
+      let cmp = 0;
+      switch (sortBy) {
+        case "item": cmp = lc(a.item).localeCompare(lc(b.item)); break;
+        case "category": cmp = lc(a.category||"").localeCompare(lc(b.category||"")); break;
+        case "qty": cmp = (qtyNum(a.qty) + (a._delta||0)) - (qtyNum(b.qty) + (b._delta||0)); break;
+        case "conf": cmp = a._conf - b._conf; break;
+        case "expires":
+          // Null expiry (no date) sinks to the bottom of asc, top of desc.
+          if (a._dExp === null && b._dExp === null) cmp = 0;
+          else if (a._dExp === null) cmp = 1;
+          else if (b._dExp === null) cmp = -1;
+          else cmp = a._dExp - b._dExp;
+          break;
+        case "khalil": cmp = allergenOrd(a._flag) - allergenOrd(b._flag); break;
+        default: cmp = 0;
+      }
+      if (cmp === 0) cmp = lc(a.item).localeCompare(lc(b.item)); // tiebreaker
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+    return sorted;
+  }, [filteredRaw, sortBy, sortDir]);
   const counts = {
     total: rows.length,
     expiring: rows.filter(r=>r._dExp!==null && r._dExp <= 5 && !r._out).length,
@@ -982,12 +1069,16 @@ function PantryView({pantry, outOfStock, toggleOutOfStock, qtyAdjustments, adjus
     </div>
     <div className="card overflow-hidden">
       <div className="grid grid-cols-12 gap-2 text-xs text-stone-500 uppercase tracking-wider px-4 py-2 border-b border-stone-200 bg-stone-50">
-        <div className="col-span-3">Item</div>
-        <div className="col-span-2">Category</div>
-        <div className="col-span-2 text-center">Qty</div>
-        <div className="col-span-1 flex items-center">Conf <InfoTip>How likely the item is still usable. Starts at ~95% on purchase day and decays automatically by category. Anything below 30% is flagged 'low'.</InfoTip></div>
-        <div className="col-span-1">Expires</div>
-        <div className="col-span-1 text-center flex items-center justify-center">Khalil <InfoTip align="right">⚠️ = contains a Khalil allergen · ? = depends on the brand/label · ✓ = safe.</InfoTip></div>
+        <SortHeader colSpan={3} sortKey="item" sortBy={sortBy} sortDir={sortDir} onClick={toggleSort}>Item</SortHeader>
+        <SortHeader colSpan={2} sortKey="category" sortBy={sortBy} sortDir={sortDir} onClick={toggleSort}>Category</SortHeader>
+        <SortHeader colSpan={2} sortKey="qty" sortBy={sortBy} sortDir={sortDir} onClick={toggleSort} align="center">Qty</SortHeader>
+        <SortHeader colSpan={1} sortKey="conf" sortBy={sortBy} sortDir={sortDir} onClick={toggleSort}>
+          Conf <InfoTip align="below">How likely the item is still usable. Starts at ~95% on purchase day and decays automatically by category. Anything below 30% is flagged 'low'.</InfoTip>
+        </SortHeader>
+        <SortHeader colSpan={1} sortKey="expires" sortBy={sortBy} sortDir={sortDir} onClick={toggleSort}>Expires</SortHeader>
+        <SortHeader colSpan={1} sortKey="khalil" sortBy={sortBy} sortDir={sortDir} onClick={toggleSort} align="center">
+          Khalil <InfoTip align="below-right">⚠️ = contains a Khalil allergen · ? = depends on the brand/label · ✓ = safe.</InfoTip>
+        </SortHeader>
         <div className="col-span-2 text-right">Actions</div>
       </div>
       <div className="divide-y divide-stone-100">
