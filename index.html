@@ -90,9 +90,13 @@ const { useState, useMemo, useEffect, useCallback, useRef, createContext, useCon
 // (2) only apply changes not already listed, (3) append a new
 // entry below describing what they changed.
 // ============================================================
-const SITE_VERSION = "2026-05-14.5";
+const SITE_VERSION = "2026-05-14.6";
 const SITE_CHANGELOG = [
   // newest first
+  { version: "2026-05-14.6", date: "2026-05-14", changes: [
+    "**Mobile white-screen hotfix.** After 14.5 shipped, the app booted to a white screen on mobile (desktop fine). Cause: PlannerView's `gapAnalysis` useMemo at line 1168 was still calling `computeRegularsAndGaps(pantry, receipts, 3)` — the old 3-arg signature from pre-14.5. The function picked up `allergens=3` (a number, truthy) instead of the config object, slipped past the `allergens || EMPTY_ALLERGENS` fallback, then threw `TypeError: Cannot read properties of undefined (reading 'blockByCategory')` inside khalilAllergenFlag. No Error Boundary in the tree → whole subtree unmounted → white screen. Desktop probably escaped because of fetch-order timing (receipts empty on first render → function early-returns null at the `if (!orders.length)` guard, never reaches the bad line). Fixed the call site to pass `allergens` and include it in the deps array.",
+    "**Defensive shape-check in flagsForRecipe and khalilAllergenFlag.** Both functions now validate the `allergens` arg is actually a config object (`typeof === 'object' && .khalil`) before reading from it, instead of just truthy-checking. The original `allergens || EMPTY_ALLERGENS` pattern only caught nullish — a number or string slipped through and crashed. Future arg-order slips will now degrade to 'treat as Khalil-safe' (visible bug) rather than white-screening (invisible bug).",
+  ]},
   { version: "2026-05-14.5", date: "2026-05-14", changes: [
     "**Cross-device sync bug fixed.** Pantry writes have synced to Supabase since 14.1, but the boot logic still treated localStorage as the canonical source — it overlaid local qtyAdjustments on top of fetched data with 'local wins' semantics, which was right pre-14.1 but became a bug once Supabase was the truth. Concrete symptom: editing a baked-beans qty on desktop, then opening the site on mobile, you'd see the mobile's stale localStorage value, not your desktop edit. Fixed by removing both the qtyAdjustments overlay and the outOfStock union: Supabase wins on boot; localStorage is now only the first-paint seed before the fetch lands.",
     "**Khalil-allergen single source of truth (audit Path C).** The audit's only Critical-severity safety item: Khalil's allergen list was hardcoded in two places (system prompt and this file's KHALIL_BLOCK/KHALIL_UNCERTAIN/KHALIL_SAFE_PHRASES). Created a Supabase table `household_allergens` (rows by eater × kind × token, with a category column for Khalil's blocked items to power gap-view labelling). Seeded with all 85 Khalil block tokens, 6 uncertain, 11 safe-phrase exceptions, 16 Max meat-block tokens, 7 Emily pork-block tokens — counts cross-checked against the source. Removed the 5 hardcoded constants. flagsForRecipe and khalilAllergenFlag now take an `allergens` config as a parameter; components pull it from AllergensContext. The system prompt still has its own copy (Path A — adding a 'DB is canonical' deferral pointer — is a future commit); for now, both are maintained by hand but the dashboard side has a single source.",
@@ -598,7 +602,10 @@ function isDairyMilk(text){
 // Falls back to EMPTY_ALLERGENS if not supplied, which treats everything
 // as safe — useful only before the boot fetch resolves.
 function flagsForRecipe(recipe, allergens){
-  const a = allergens || EMPTY_ALLERGENS;
+  // Validate shape rather than just truthiness — see khalilAllergenFlag
+  // for the rationale (14.6 white-screen postmortem).
+  const a = (allergens && typeof allergens === 'object' && allergens.khalil)
+    ? allergens : EMPTY_ALLERGENS;
   const flags = { khalil:"safe", khalilReason:[], khalilUncertain:[], max:"safe", maxReason:[], emily:"safe", emilyReason:[] };
   const wheatTokens = new Set(a.khalil.blockByCategory?.wheat || []);
   for (const ing of recipe.ingredients || []) {
@@ -1165,7 +1172,7 @@ function PlannerView({pantry, outOfStock, cooked}){
 
   // ===== Suggested next basket =====
   const priceIndex = useMemo(()=> buildPriceIndex(receipts), [receipts]);
-  const gapAnalysis = useMemo(()=> computeRegularsAndGaps(pantry, receipts, 3), [pantry, receipts]);
+  const gapAnalysis = useMemo(()=> computeRegularsAndGaps(pantry, receipts, allergens, 3), [pantry, receipts, allergens]);
   const nextDelivery = useMemo(()=> suggestNextDelivery(receipts), [receipts]);
 
   const basket = useMemo(()=>{
@@ -2053,7 +2060,11 @@ function findPantryMatch(productName){
 // English product naming, not allergen facts, so they live in code.
 function khalilAllergenFlag(name, allergens){
   if (!name) return null;
-  const a = allergens || EMPTY_ALLERGENS;
+  // Validate shape rather than just truthiness — a non-config truthy value
+  // (e.g. a number passed in the wrong arg position) used to white-screen
+  // the app in 14.5. Now we degrade to EMPTY_ALLERGENS instead.
+  const a = (allergens && typeof allergens === 'object' && allergens.khalil)
+    ? allergens : EMPTY_ALLERGENS;
   const n = name.toLowerCase();
   const cats = a.khalil.blockByCategory || {};
 
