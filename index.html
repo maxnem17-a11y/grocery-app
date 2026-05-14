@@ -105,9 +105,15 @@ const { useState, useMemo, useEffect, useCallback, useRef, createContext, useCon
 // (2) only apply changes not already listed, (3) append a new
 // entry below describing what they changed.
 // ============================================================
-const SITE_VERSION = "2026-05-14.13";
+const SITE_VERSION = "2026-05-14.14";
 const SITE_CHANGELOG = [
   // newest first
+  { version: "2026-05-14.14", date: "2026-05-14", changes: [
+    "**Khalil allergen audit moved from Stats → Pantry tab.** The audit lists every current pantry item flagged `son_allergen` or `check`, with a chip showing which. It used to live as a permanent section at the bottom of the Stats tab — wrong tab, since the audit is about *current pantry state*, not library health. Now: the Khalil-allergen Stat KPI on the Pantry tab is clickable; clicking it expands an inline panel below the stats row with the same audit content. Click again (or the 'Hide' link) to collapse. Stats tab no longer renders the section; its unused `pantryAllergens` variable was removed.",
+    "**`Stat` component gained optional `onClick` + `expanded` props.** When `onClick` is supplied the card becomes a button: cursor pointer, hover background, role=button, tabIndex=0, Enter/Space keyboard activation, ARIA aria-expanded. A small ▶/▼ chevron appears in the top-right of the card to signal it's expandable and reflect open state. Stat cards without an onClick are unchanged. The KPI's tooltip got a 'Click to see the full list' suffix so the affordance is also documented in the help text.",
+    "**Empty-state copy added.** If the pantry contains zero Khalil-allergen items, the expanded panel now shows 'No Khalil-allergen items in the current pantry.' instead of a blank grid. The Stats tab version assumed there'd always be items; the new home needs the fallback because at some point — once Cravendale, frozen peas, etc. are out — the list could legitimately be empty.",
+    "**Why this matters operationally.** Khalil-safety is the household's strictest constraint. Burying the audit on a tab the user opens once a quarter (library-health) made it functionally invisible. Hanging it off the Pantry KPI makes it a one-tap drill-down from the number that summarises it. Aligns with the §6 audit recommendation that the Stats tab is doing the job of a library-QA dashboard and should be demoted as features migrate to their natural homes.",
+  ]},
   { version: "2026-05-14.13", date: "2026-05-14", changes: [
     "**Legend strip removed.** The persistent legend row below the tab nav (5 colour swatches + 3 emoji audience tags) was deleted entirely. For a single-user dashboard where the operator wrote the colour system, the legend was teaching information the user can't *not* already know, and was duplicating content already present in chip tooltips. The §2 audit had flagged it as 'two parallel visual systems' and 'mostly noise' — this is the cut. `<LegendStrip/>` removed from App; component function removed; CSS classes (`.legend-strip`, `.lkey`, `.sw`) left as dead code for one commit (small, may be reused if a context-aware variant is ever needed). Net effect: ~30px of vertical space reclaimed on every tab, actual content moves up.",
     "**Gaps tab: blurb rewritten as intro + bullets.** The 'What this view does' paragraph was a dense three-sentence run-on that hid four distinct ideas inside it. Reformatted to a one-line intro ('Spots items you buy regularly but don't currently have') followed by four bullets: what counts as a regular, the two checks (vs latest delivery + vs pantry), what counts as a gap, and what gets filtered out by household rules. Same content, ~40% faster to parse.",
@@ -921,12 +927,24 @@ function Bar({pct, color}){
   const c = color || (pct>=70?"#16a34a":pct>=40?"#d97706":"#dc2626");
   return <div className="bar"><div style={{width:`${pct}%`, background:c}}/></div>;
 }
-function Stat({label, value, tone, sub, tip, tipAlign}){
+function Stat({label, value, tone, sub, tip, tipAlign, onClick, expanded}){
   const tmap = { ok:"text-emerald-700", warn:"text-amber-700", danger:"text-red-700", info:"text-blue-700" };
-  return <div className="card px-4 py-3">
+  // When onClick is provided, the card becomes a button: cursor, hover state, ARIA, keyboard.
+  // The small chevron at top-right signals it's expandable and reflects open state.
+  const clickable = typeof onClick === "function";
+  const interactiveProps = clickable ? {
+    role: "button",
+    tabIndex: 0,
+    "aria-expanded": !!expanded,
+    onClick,
+    onKeyDown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } },
+  } : {};
+  const className = "card px-4 py-3" + (clickable ? " cursor-pointer hover:bg-stone-50 transition-colors select-none" : "");
+  return <div className={className} {...interactiveProps}>
     <div className="text-xs text-stone-500 uppercase tracking-wider flex items-center">
       <span>{label}</span>
       {tip && <InfoTip align={tipAlign}>{tip}</InfoTip>}
+      {clickable && <span className="ml-auto text-stone-400 text-[10px]" aria-hidden="true">{expanded ? "▼" : "▶"}</span>}
     </div>
     <div className={`text-2xl font-semibold mt-0.5 ${tmap[tone]||""}`}>{value}</div>
     {sub && <div className="text-xs text-stone-500 mt-0.5">{sub}</div>}
@@ -961,6 +979,10 @@ function Section({title, subtitle, tone, children, collapsible=false, defaultOpe
 function PantryView({pantry, outOfStock, toggleOutOfStock, qtyAdjustments, adjustQty, syncErrors}){
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState("all");
+  // Khalil-allergen audit panel: expands inline below the KPI row when the user clicks
+  // the Khalil-allergen Stat card. Same content that used to live on the Stats tab —
+  // moved here because the audit is operationally part of the pantry, not the library.
+  const [khalilOpen, setKhalilOpen] = useState(false);
   // Sortable columns. Click a header to toggle: first click → asc, second click → desc,
   // third click → reset to default (item asc). Out-of-stock rows are always sunk to the
   // bottom regardless of sort direction so they don't pollute the top of the list.
@@ -1047,11 +1069,31 @@ function PantryView({pantry, outOfStock, toggleOutOfStock, qtyAdjustments, adjus
       <Stat label="Low confidence" value={counts.low} tone={counts.low>0?"warn":"ok"}
         tip="Items with confidence under 30%. Confidence decays from 95% on purchase day based on category (fresh produce decays fast; dry goods decay slowly). Low confidence ≠ definitely gone — just less certain it's still usable."/>
       <Stat label="Khalil-allergen" value={counts.son} tone="info"
-        tip="Items containing one of Khalil's allergens (dairy, eggs, wheat, lentils, peas, chickpeas, beans, avocado, beef, tree nuts) or marked as 'check label'. Tracked so meal planning excludes them when needed."/>
+        tip="Items containing one of Khalil's allergens (dairy, eggs, wheat, lentils, peas, chickpeas, beans, avocado, beef, tree nuts) or marked as 'check label'. Tracked so meal planning excludes them when needed. Click to see the full list."
+        onClick={() => setKhalilOpen(o => !o)} expanded={khalilOpen}/>
       <Stat label="Marked out" value={counts.out} tone={counts.out>0?"danger":"ok"}
         tipAlign="right"
         tip="Items you've manually marked as out of stock in this browser. They're excluded from recipe matching and shown struck-through. Click 'Restore' on a row to undo."/>
     </div>
+    {khalilOpen && <div className="card p-4 mb-4 border-blue-200 bg-blue-50/30">
+      <div className="flex items-baseline justify-between mb-3 flex-wrap gap-2">
+        <h3 className="text-base font-semibold flex items-center gap-2">
+          <span>Khalil allergen audit · {pantry.filter(p => p.allergen_flag && p.allergen_flag !== "household_safe").length} items</span>
+          <InfoTip>Pantry items currently flagged as either a confirmed Khalil allergen or 'check label' (brand/recipe dependent). Useful when meal-planning to know what's in the kitchen he can't eat.</InfoTip>
+        </h3>
+        <button onClick={() => setKhalilOpen(false)} className="text-xs text-stone-500 hover:text-stone-700 underline">Hide</button>
+      </div>
+      {(() => {
+        const pantryAllergens = pantry.filter(p => p.allergen_flag && p.allergen_flag !== "household_safe");
+        if (!pantryAllergens.length) return <div className="text-sm text-stone-500">No Khalil-allergen items in the current pantry.</div>;
+        return <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2 text-sm">
+          {pantryAllergens.map((p,i)=> <div key={i} className="card px-3 py-2 flex items-center justify-between">
+            <span className="font-medium">{p.item}</span>
+            {p.allergen_flag==="son_allergen" ? <Chip tone="danger" title="Confirmed Khalil allergen">blocked</Chip> : <Chip tone="warn" title="Allergen status depends on the product label — verify before serving">check label</Chip>}
+          </div>)}
+        </div>;
+      })()}
+    </div>}
     <div className="flex flex-wrap gap-2 items-center mb-3">
       <input className="border border-stone-300 rounded-lg px-3 py-1.5 text-sm flex-1 min-w-[160px]" placeholder="Search pantry by item name…" value={q} onChange={e=>setQ(e.target.value)} />
       <div className="flex flex-wrap gap-1">
@@ -2684,7 +2726,6 @@ function AuditView({pantry}){
   const untagged = RECIPES.length - taggedRecipes;
   const hasMakeablePct = RECIPES.filter(r=> r.makeable_pct !== null && r.makeable_pct !== undefined).length;
   const pantryWithFlags = pantry.filter(p=>p.allergen_flag).length;
-  const pantryAllergens = pantry.filter(p => p.allergen_flag && p.allergen_flag !== "household_safe");
 
   const sources = [...new Set(RECIPES.map(r=>r._source_file))].sort();
   const bySource = sources.map(s => {
@@ -2747,16 +2788,6 @@ function AuditView({pantry}){
           <span><span className="inline-block w-2 h-2 mr-1 align-middle" style={{background:"#d97706"}}/>check</span>
           <span><span className="inline-block w-2 h-2 mr-1 align-middle" style={{background:"#2563eb"}}/>adults-only</span>
         </div>
-      </div>
-    </Section>
-
-    <Section title="Khalil allergen audit on pantry" tone="info"
-      tip="Pantry items currently flagged as either a confirmed allergen for Khalil or 'check label' (brand/recipe dependent). Useful when meal-planning to know what's in the kitchen he can't eat.">
-      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2 text-sm">
-        {pantryAllergens.map((p,i)=> <div key={i} className="card px-3 py-2 flex items-center justify-between">
-          <span className="font-medium">{p.item}</span>
-          {p.allergen_flag==="son_allergen" ? <Chip tone="danger" title="Confirmed Khalil allergen">blocked</Chip> : <Chip tone="warn" title="Allergen status depends on the product label — verify before serving">check label</Chip>}
-        </div>)}
       </div>
     </Section>
   </div>;
