@@ -105,9 +105,15 @@ const { useState, useMemo, useEffect, useCallback, useRef, createContext, useCon
 // (2) only apply changes not already listed, (3) append a new
 // entry below describing what they changed.
 // ============================================================
-const SITE_VERSION = "2026-05-14.15";
+const SITE_VERSION = "2026-05-14.16";
 const SITE_CHANGELOG = [
   // newest first
+  { version: "2026-05-14.16", date: "2026-05-14", changes: [
+    "**Sort toggle: binary asc↔desc, no third-state reset.** All three sortable tables (Pantry, Gaps regulars, Leverage) now use a simple two-state toggle. Previously: first click set the column's default direction, second click reversed, third click reset everything back to the table's default column. The reset was confusing — users didn't expect a third click to take them somewhere different from clicks 1 or 2, and there was no visual signal that 'reset' was a state the toggle could land in. Standard table convention is binary asc↔desc, and that's what this is now. Click 1 sorts; click 2 reverses; click 3 reverses again. The table's default sort is still recoverable by clicking a different column and clicking back.",
+    "**First-click direction is now per-column, picked to land on the 'interesting end'.** Rather than the previous string=asc / numeric=desc heuristic, each column declares its own opening direction in a `DEFAULT_DIR` map. The heuristic was wrong on several columns — Expires wants soonest-first (asc on date), Last seen wants stalest-first (asc on timestamp, since older dates are smaller numbers), Conf wants lowest-first (asc, what's at risk). Specific defaults: Pantry — `item/category/qty/conf/expires/khalil` all asc (lowest/soonest/most-flagged first). Gaps regulars — `count` desc, `item` asc, `lastSeen` asc (oldest timestamps = stalest items, surfaced first), `status` asc (gap=0 first — already correct from 14.15). Leverage — `ingredient` asc, `recipes/boost/to70` all desc (highest-impact first).",
+    "**SortHeader hover title updated.** The title attribute on an active sorted column used to say 'click to reverse' on first click and 'click to reset' on the second — now just always says 'click to reverse'. Component-level comment also rewritten to document the binary toggle + per-view DEFAULT_DIR pattern.",
+    "**No behavioural change to disabled state, comparators, or tiebreakers.** The Gaps Status disabled-on-single-filter logic (14.15), the hardened lastSeen comparator (14.15), and the out-of-stock sink-to-bottom rule on Pantry (14.12) all unchanged.",
+  ]},
   { version: "2026-05-14.15", date: "2026-05-14", changes: [
     "**Gaps tab sort fixes — Status and Last seen.** Reported as 'not sorting correctly'. Two distinct issues, fixed together.",
     "**Status sort: root cause was zero variance on filtered views.** On the default 'Real gaps' filter every row has statusOrd = 0 (they're all gaps by construction — that's what makes them gaps). Same for 'Restocked', 'Excluded'. The sort was technically running but every comparison returned 0, so the tiebreaker (item name asc) took over and the click looked like a no-op. Fixed by computing `hasStatusVariance` from the visible rows and rendering the Status SortHeader as a disabled muted label when there's nothing to sort — with a title attribute explaining 'switch to All regulars to sort by status'. The sort still works on the 'All regulars' filter where statuses genuinely mix.",
@@ -872,10 +878,12 @@ function InfoTip({ children, align="center" }){
     <span className={cls} role="tooltip">{children}</span>
   </span>;
 }
-// Sortable column header for the pantry table. Click to toggle sort direction;
-// shows a small ▲/▼ chevron when this column is the active sort. The default Item
-// column starts as asc; a third click on the same column resets the table to the
-// default (Item asc) — handled by the toggleSort fn in PantryView.
+// Sortable column header. Click toggles sort direction (binary asc↔desc as of 14.16).
+// First click on a new column applies that column's "interesting direction" default
+// (see PANTRY_DEFAULT_DIR / REG_DEFAULT_DIR / LEV_DEFAULT_DIR in the consuming views);
+// subsequent clicks on the same column just flip. Shows a small ▲/▼ chevron when this
+// column is the active sort. The `disabled` prop renders a muted, non-interactive label
+// (used by the Gaps Status header on single-status filters where sorting is a no-op).
 function SortHeader({ colSpan, sortKey, sortBy, sortDir, onClick, align="left", children, disabled=false, disabledReason }){
   const active = sortBy === sortKey;
   const justify = align==="center" ? "justify-center" : align==="right" ? "justify-end" : "justify-start";
@@ -894,7 +902,7 @@ function SortHeader({ colSpan, sortKey, sortBy, sortDir, onClick, align="left", 
     onClick={()=>onClick(sortKey)}
     role="button" tabIndex={0}
     onKeyDown={(e)=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); onClick(sortKey); } }}
-    title={active ? `Sorted ${sortDir==="asc"?"ascending":"descending"} — click to ${sortDir==="asc"?"reverse":"reset"}` : "Click to sort"}
+    title={active ? `Sorted ${sortDir==="asc"?"ascending":"descending"} — click to reverse` : "Click to sort"}
   >
     {children}
     {active && <span className="text-stone-700 text-[9px]">{chevron}</span>}
@@ -999,16 +1007,21 @@ function PantryView({pantry, outOfStock, toggleOutOfStock, qtyAdjustments, adjus
   // the Khalil-allergen Stat card. Same content that used to live on the Stats tab —
   // moved here because the audit is operationally part of the pantry, not the library.
   const [khalilOpen, setKhalilOpen] = useState(false);
-  // Sortable columns. Click a header to toggle: first click → asc, second click → desc,
-  // third click → reset to default (item asc). Out-of-stock rows are always sunk to the
-  // bottom regardless of sort direction so they don't pollute the top of the list.
+  // Sortable columns — binary asc↔desc toggle. First click on a new column uses
+  // a per-column "interesting direction" default (the end users most often want
+  // to see first); subsequent clicks just flip. No third-state reset — see 14.16.
+  //   item, category → asc (A→Z, conventional for strings)
+  //   qty → asc (lowest first = most depleted)
+  //   conf → asc (lowest confidence first — what's at risk)
+  //   expires → asc (soonest first — what to use up)
+  //   khalil → asc (son_allergen=0 first — most flagged surfaced)
+  // Out-of-stock rows are always sunk to the bottom regardless of sort direction.
+  const PANTRY_DEFAULT_DIR = { item:"asc", category:"asc", qty:"asc", conf:"asc", expires:"asc", khalil:"asc" };
   const [sortBy, setSortBy] = useState("item");
   const [sortDir, setSortDir] = useState("asc");
   const toggleSort = (key) => {
-    if (sortBy !== key) { setSortBy(key); setSortDir("asc"); return; }
-    if (sortDir === "asc") { setSortDir("desc"); return; }
-    // Third click on the same column: reset to default
-    setSortBy("item"); setSortDir("asc");
+    if (sortBy !== key) { setSortBy(key); setSortDir(PANTRY_DEFAULT_DIR[key] || "asc"); return; }
+    setSortDir(sortDir === "asc" ? "desc" : "asc");
   };
   // Format qty string + integer delta into a display value. Tries to update the numeric
   // portion of "500g" → "400g" when delta=-1 and step inferred… but step inference is
@@ -1629,15 +1642,17 @@ function RecipeMicroList({items}){
 // Uses the same numbered/ranked layout as the Gaps tab for consistency.
 function LeverageTileGrid({items}){
   const [open, setOpen] = useState(null);
-  // Sort state. Default to recipeCount desc, matching the rank order returned by
-  // leverageScore (most-impactful ingredients first). The # column reflects current
-  // display order so it re-numbers after a sort change.
+  // Sort state — binary asc↔desc toggle, per-column smart defaults (14.16).
+  //   ingredient → asc (A→Z)
+  //   recipes, boost, to70 → desc (highest impact first — what unlocks the most)
+  // Default is recipes desc, matching leverageScore's rank order. The # column
+  // reflects current display order so it re-numbers after a sort change.
+  const LEV_DEFAULT_DIR = { ingredient:"asc", recipes:"desc", boost:"desc", to70:"desc" };
   const [sortBy, setSortBy] = useState("recipes");
   const [sortDir, setSortDir] = useState("desc");
   const toggleSort = (key) => {
-    if (sortBy !== key) { setSortBy(key); setSortDir(key==="ingredient"?"asc":"desc"); return; }
-    if (sortDir === "asc") { setSortDir("desc"); return; }
-    setSortBy("recipes"); setSortDir("desc");
+    if (sortBy !== key) { setSortBy(key); setSortDir(LEV_DEFAULT_DIR[key] || "desc"); return; }
+    setSortDir(sortDir === "asc" ? "desc" : "asc");
   };
   const sortedItems = useMemo(() => {
     if (!items || !items.length) return items || [];
@@ -2517,20 +2532,22 @@ function GapsView({pantry, outOfStock}){
   const [minOrders, setMinOrders] = useState(3);
   const [filter, setFilter] = useState("gap"); // gap | all | restocked | excluded
   const [leverageLimit, setLeverageLimit] = useState(15);
-  // Regulars/gaps table sort. Defaults to count desc (most-frequent regulars first)
-  // which matches the implicit ranking computeRegularsAndGaps returns.
+  // Regulars/gaps table sort — binary asc↔desc toggle, per-column smart defaults (14.16).
+  //   count → desc (most-frequent regulars first; matches computeRegularsAndGaps order)
+  //   item → asc (A→Z)
+  //   lastSeen → asc (oldest timestamp first = STALEST first — the whole point of the
+  //              column is spotting things you haven't bought in ages)
+  //   status → asc (gap=0 first — most actionable on top)
+  const REG_DEFAULT_DIR = { count:"desc", item:"asc", lastSeen:"asc", status:"asc" };
   const [regSortBy, setRegSortBy] = useState("count");
   const [regSortDir, setRegSortDir] = useState("desc");
   const toggleRegSort = (key) => {
-    // Status defaults to asc (gap=0 first — most actionable on top). Item defaults to asc.
-    // All other columns (count, lastSeen) default to desc — biggest/most-recent first.
     if (regSortBy !== key) {
       setRegSortBy(key);
-      setRegSortDir((key==="item" || key==="status") ? "asc" : "desc");
+      setRegSortDir(REG_DEFAULT_DIR[key] || "asc");
       return;
     }
-    if (regSortDir === "asc") { setRegSortDir("desc"); return; }
-    setRegSortBy("count"); setRegSortDir("desc");
+    setRegSortDir(regSortDir === "asc" ? "desc" : "asc");
   };
 
   // Leverage: ingredients that unlock the most blocked recipes
