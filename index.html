@@ -2801,8 +2801,8 @@ function AuditView({pantry}){
     <div className="text-xs text-stone-600 bg-stone-50 border border-stone-200 rounded-lg px-3 py-2">
       <strong>Library health check.</strong> Quick stats about the recipe library and pantry coverage — useful for spotting gaps in the data (missing tags, untagged recipes, manifest mismatches) rather than gaps in your basket.
     </div>
-    <Section title="Workflow integrity" subtitle="Snapshot of how complete the structured data is" tone="ok"
-      tip="Each card reports on one quality dimension: are all recipes tagged with an audience, are all pantry items tagged with an allergen flag, etc. Green = OK, amber = a small fix needed.">
+    <Section title="Workflow integrity" subtitle="Health check — green means all good, amber means a small fix is needed" tone="ok"
+      tip="Each card reports on one data-quality dimension: are all recipes tagged with an audience, are all pantry items tagged with an allergen flag, etc. Status chip on each card: ✓ OK = nothing to do, ⚠ Fix needed = small repair recommended, ⚠ Critical action needed = fix before relying on this data.">
       <div className="grid sm:grid-cols-2 gap-3 text-sm">
         <GapCard label="Recipes with audience tag" value={taggedRecipes} of={RECIPES.length} severity={untagged > 0 ? "medium":"low"}
                  note={untagged > 0 ? `${untagged} recipes still untagged — re-import the patched files in /project-updates/.` : "All recipes now carry audience + eaters tags."}/>
@@ -2852,13 +2852,16 @@ function AuditView({pantry}){
 }
 function GapCard({label, value, of, severity, note}){
   const tone = severity==="high"?"danger":severity==="medium"?"warn":"ok";
-  const sevTitle = severity==="high" ? "High severity — fix before relying on this data"
-    : severity==="medium" ? "Medium severity — small fix recommended"
-    : "Low severity — all good";
+  const sevLabel = severity==="high" ? "⚠ Critical action needed"
+    : severity==="medium" ? "⚠ Fix needed"
+    : "✓ OK";
+  const sevTitle = severity==="high" ? "Critical — fix before relying on this data"
+    : severity==="medium" ? "Small fix recommended"
+    : "All good — no action needed";
   return <div className="card p-3">
     <div className="flex items-start justify-between gap-2 mb-1">
       <div className="font-medium text-sm leading-snug">{label}</div>
-      <Chip tone={tone} title={sevTitle}>{severity}</Chip>
+      <Chip tone={tone} title={sevTitle}>{sevLabel}</Chip>
     </div>
     <div className="mono text-xs text-stone-500 mb-1.5">{value}{of!==undefined && of!=="—" ? ` / ${of}`:""}</div>
     <div className="text-xs text-stone-600 leading-snug">{note}</div>
