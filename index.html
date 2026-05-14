@@ -98,9 +98,15 @@ const { useState, useMemo, useEffect, useCallback, useRef, createContext, useCon
 // (2) only apply changes not already listed, (3) append a new
 // entry below describing what they changed.
 // ============================================================
-const SITE_VERSION = "2026-05-14.8";
+const SITE_VERSION = "2026-05-14.9";
 const SITE_CHANGELOG = [
   // newest first
+  { version: "2026-05-14.9", date: "2026-05-14", changes: [
+    "**Recipes tab: search by ingredient.** The existing search box now matches recipes whose ingredients contain the query, not just the recipe name. Type 'tofu' and you get every recipe using firm tofu, silken tofu, smoked tofu, etc; type 'ginger' and you get everything from masala chai to chilli tofu. Matches against both the descriptive ingredient text ('firm tofu, drained and cut into 3cm cubes') and the canonical pantry_match key ('firm tofu'), so casual spellings find recipes whose ingredient lines are verbose.",
+    "Implementation: the filter at line 1025 of RecipesView was a one-liner `lc(r.name).includes(lc(q))`. Now it lowercases the query once and checks recipe name OR (some ingredient's item field includes the needle OR ingredient's pantry_match includes the needle). All other filters (source, eater, makeable %) compose on top unchanged.",
+    "Placeholder updated to 'Search by name or ingredient (e.g. tofu, ginger)…' and the filter-row intro line now mentions ingredient search explicitly. No new state, no new controls, no schema changes — search just got more useful.",
+    "Backlog: multi-ingredient ranked search ('tofu, ginger, lime' → recipes that hit 2/3 ranked above 1/3); a dedicated 'what can I cook now from my pantry' view on the Pantry tab; the existing Min-makeable slider already covers the simpler version of that.",
+  ]},
   { version: "2026-05-14.8", date: "2026-05-14", changes: [
     "**HTML cache-busting + service worker disabled.** Reported friction on 14.7: even after pushing a new commit, the site kept serving the previous version on desktop and mobile until a hard refresh. Two layers were at play. (1) GitHub Pages serves index HTML with a 10-minute browser cache-control by default, so a regular reload happily uses the stale cached copy. (2) The page had been registering a service worker from `service-worker.js` since some earlier commit; nobody on this project actually knew what it cached (the parked items list flagged this as never-investigated), but a SW can intercept fetches before the HTTP cache layer and serve stale content indefinitely regardless of refresh.",
     "Fix layer 1: added the standard three no-cache meta tags to `<head>` (`Cache-Control: no-cache, no-store, must-revalidate`, `Pragma: no-cache`, `Expires: 0`). Browser revalidates with origin on every load. Adds one cheap conditional GET per page (~50-100ms); for a single-user dashboard where freshness matters, worth it.",
@@ -1023,7 +1029,14 @@ function RecipesView({pantry, outOfStock, cooked, addCooked, eaterFilter, setEat
   const cookedSet = useMemo(()=> new Set(cooked.map(c=>c.meal_id)), [cooked]);
 
   const filtered = decorated.filter(r=>{
-    if (q && !lc(r.name).includes(lc(q))) return false;
+    if (q) {
+      const needle = lc(q);
+      const inName = lc(r.name).includes(needle);
+      const inIngredients = (r.ingredients||[]).some(ing =>
+        lc(ing.item).includes(needle) || lc(ing.pantry_match).includes(needle)
+      );
+      if (!inName && !inIngredients) return false;
+    }
     if (source!=="all" && r._source_file !== source) return false;
     if (r._make.pct < minMakeable) return false;
     if (eaterFilter === "khalil" && r._flags.khalil === "blocked") return false;
@@ -1053,10 +1066,10 @@ function RecipesView({pantry, outOfStock, cooked, addCooked, eaterFilter, setEat
         tip="Recipes you've marked as cooked in this browser. The list is in the Planner tab — paste it into a Claude session to update your canonical pantry."/>
     </div>
     <div className="text-xs text-stone-500 mb-2">
-      <strong>Filters:</strong> search by name, narrow by source/eater, sort the list, and use the slider to hide recipes you don't have enough ingredients for. Click any recipe row to see what's in your pantry vs missing, plus per-eater notes.
+      <strong>Filters:</strong> search by recipe name or ingredient (e.g. type "tofu" to find every recipe using it), narrow by source/eater, sort the list, and use the slider to hide recipes you don't have enough ingredients for. Click any recipe row to see what's in your pantry vs missing, plus per-eater notes.
     </div>
     <div className="flex flex-wrap gap-2 mb-3 items-center">
-      <input className="border border-stone-300 rounded-lg px-3 py-1.5 text-sm flex-1 min-w-[160px]" placeholder="Search recipes by name…" value={q} onChange={e=>setQ(e.target.value)} />
+      <input className="border border-stone-300 rounded-lg px-3 py-1.5 text-sm flex-1 min-w-[160px]" placeholder="Search by name or ingredient (e.g. tofu, ginger)…" value={q} onChange={e=>setQ(e.target.value)} />
       <select className="border border-stone-300 rounded-lg px-2 py-1.5 text-sm" value={source} onChange={e=>setSource(e.target.value)} title="Filter by which file the recipe came from">
         <option value="all">All sources</option>
         {sources.map(s=> <option key={s} value={s}>{s}</option>)}
