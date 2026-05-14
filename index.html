@@ -98,9 +98,18 @@ const { useState, useMemo, useEffect, useCallback, useRef, createContext, useCon
 // (2) only apply changes not already listed, (3) append a new
 // entry below describing what they changed.
 // ============================================================
-const SITE_VERSION = "2026-05-14.10";
+const SITE_VERSION = "2026-05-14.11";
 const SITE_CHANGELOG = [
   // newest first
+  { version: "2026-05-14.11", date: "2026-05-14", changes: [
+    "**Stale UI text + dead buttons cleanup.** The dashboard had accumulated several footer/tooltip strings from the pre-Supabase era (before 14.1/14.2/14.5) that told users to 'paste cooked log back into a Claude session for canonical pantry updates' and described pantry data as coming 'from a snapshot.' All untrue since the migrations — writes go straight to Supabase and sync across devices. These strings were actively misleading: a user asked what 'snapshot 2026-05-11' in the footer meant, and the honest answer was 'nothing, it's a hardcoded fossil.'",
+    "Footer line: rewritten from 'State saved locally in your browser ✓ · paste cooked log back into a Claude session for canonical pantry updates' to 'Synced to Supabase ✓ across devices'. The local storage check (STORAGE_OK) still flips the tick to a cross if browser storage is unavailable — that's still meaningful as a first-paint cache health indicator.",
+    "Footer 'snapshot 2026-05-11' label: replaced with a live 'last receipt: [date]' label computed from the newest receipt's delivery_date in the receipts context. This is the thing users actually want to know — when the receipt data was last refreshed. Falls back to nothing if receipts haven't loaded yet. The unused GENERATED_AT constant has been removed.",
+    "Export state and Reset buttons: removed entirely. Export state downloaded a JSON blob that was useful only for the dead paste-back workflow (and contained data already canonical in Supabase). Reset called setCooked([]) / setOutOfStock(new Set()) etc. but did NOT delete from Supabase — so clicking it cleared local React state, looked fresh, then re-populated everything from Supabase on next page load. Silently broken since 14.5. If a real Reset feature is ever wanted, that's a deliberate build (with server-side deletes and confirmation), not a leftover button. The exportAll and clearAll functions are deleted with their buttons.",
+    "Pantry tab help-banner blurb: rewritten from 'The data comes from a snapshot — Claude is the source of truth for edits. Anything you mark here stays in this browser only; paste those back into a Claude session...' to 'Your edits (out-of-stock toggles, cooked log, qty adjustments) sync to Supabase automatically and persist across devices. Receipt parsing and bulk recipe updates still happen via Claude.' Accurate description of the current split.",
+    "Pantry 'Items tracked' Stat tip: rewritten from 'Comes from the embedded snapshot, not from live counting.' to 'Reflects the last receipt + any manual adjustments. Not live-counted — qty is whatever was last set.' The 'not live-counted' caveat is the genuinely useful half and is preserved.",
+    "Internal: removed the GENERATED_AT constant and its two-line explanatory comment. STORAGE_OK is kept because it still controls the first-paint behaviour and a couple of useEffect gates.",
+  ]},
   { version: "2026-05-14.10", date: "2026-05-14", changes: [
     "**Error Boundary added.** The 14.6 white-screen incident was caused by a render error inside a useMemo that propagated up the tree with no catch — the whole subtree unmounted and the user saw a blank page. With Khalil's allergen logic running in render code (flagsForRecipe, khalilAllergenFlag) any future similar slip is safety-relevant, so this commit adds a top-level Error Boundary that wraps `<App/>`. On a render throw it now shows a visible panel with the error message and a 'Reload' button instead of going white, and logs the error + componentStack to the console so future debugging is one F12 away.",
     "Implementation: small class component `ErrorBoundary` defined just below the React destructure (added `Component` to that destructure). Standard getDerivedStateFromError + componentDidCatch pair; no external deps. Wrapping is just `<ErrorBoundary><App/></ErrorBoundary>` at the createRoot call. ~25 lines total, no schema or behaviour change in the happy path.",
@@ -280,10 +289,6 @@ const SUPABASE = {
 // saved_links blob was dead weight).
 // ============================================================
 const RAW = JSON.parse(document.getElementById('raw-data').textContent);
-const GENERATED_AT = "2026-05-11";
-// TODAY is anchored to the real current date (not GENERATED_AT) so expiry
-// day-counts stay accurate even when the embedded snapshot is a few days stale.
-// GENERATED_AT is kept purely as a display label showing when the data was last refreshed.
 const TODAY = (() => {
   const now = new Date();
   return new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate(), 12, 0, 0));
@@ -832,7 +837,7 @@ function HelpBanner({ onDismiss }){
         <h2>What is this dashboard?</h2>
         <p className="text-sm text-stone-700 mt-1.5 leading-relaxed">
           A read-mostly view of your household's groceries: what's in the pantry, what to cook this week, what you've bought from Tesco, and what's likely missing.
-          The data comes from a snapshot — Claude is the source of truth for edits. Anything you mark here (out-of-stock toggles, cooked log) stays in this browser only; paste those back into a Claude session to update the canonical state.
+          Your edits (out-of-stock toggles, cooked log, qty adjustments) sync to Supabase automatically and persist across devices. Receipt parsing and bulk recipe updates still happen via Claude.
         </p>
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-1.5 mt-3 text-xs text-stone-700">
           <div><strong>Planner</strong> — what to cook this week, grouped by need.</div>
@@ -956,7 +961,7 @@ function PantryView({pantry, outOfStock, toggleOutOfStock, qtyAdjustments, adjus
   return <>
     <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
       <Stat label="Items tracked" value={counts.total}
-        tip="Every item currently known to be in your kitchen — fridge, freezer, cupboard. Comes from the embedded snapshot, not from live counting."/>
+        tip="Every item currently known to be in your kitchen — fridge, freezer, cupboard. Reflects the last receipt + any manual adjustments. Not live-counted — qty is whatever was last set."/>
       <Stat label="Expiring ≤5d" value={counts.expiring} tone={counts.expiring>0?"warn":"ok"}
         tip="Items with an estimated expiry date within the next 5 days. Use the Planner tab to find recipes that use them."/>
       <Stat label="Low confidence" value={counts.low} tone={counts.low>0?"warn":"ok"}
@@ -3052,23 +3057,13 @@ function App(){
     };
   }, []);
 
-  const exportAll = () => {
-    const blob = new Blob([JSON.stringify({
-      cooked, outOfStock: [...outOfStock], qtyAdjustments, exported_at: new Date().toISOString()
-    }, null, 2)], {type:"application/json"});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href=url; a.download=`grocery-state-${new Date().toISOString().slice(0,10)}.json`; a.click();
-    URL.revokeObjectURL(url);
-  };
-  const clearAll = () => {
-    if (confirm("Clear ALL saved data (cooked log, marked-out items, qty adjustments)? This cannot be undone.")) {
-      setCooked([]); setOutOfStock(new Set()); setQtyAdjustments({}); setSyncErrors({}); setCookedSyncErrors({});
-      try { localStorage.removeItem(LS_KEY); } catch {}
-    }
-  };
-
   const expiringCount = pantry.filter(p=>!outOfStock.has(p.item) && daysUntilExpiry(p)!==null && daysUntilExpiry(p)<=5).length;
   const orderCount = receipts.length;
+  // Newest receipt's delivery_date — drives the "last receipt: ..." label in the header.
+  // receipts can be empty during loading or on a totally fresh setup.
+  const lastReceiptDate = receipts.length
+    ? receipts.map(r => r.delivery_date).filter(Boolean).sort().pop()
+    : null;
 
   // ---- Loading + error gates ----
   if (loading) {
@@ -3117,12 +3112,8 @@ function App(){
         </p>
       </div>
       <div className="text-xs text-stone-500 mono flex flex-col items-end gap-1">
-        <span>snapshot {GENERATED_AT}</span>
-        <div className="flex gap-2">
-          {!showHelpBanner && <button onClick={()=>setShowHelpBanner(true)} className="pill" title="Reopen the introduction panel">? Help</button>}
-          <button onClick={exportAll} className="pill" title="Download your local-only data (cooked log + out-of-stock marks) as a JSON file. Paste it into a Claude session to update canonical state.">Export state</button>
-          <button onClick={clearAll} className="pill" style={{color:"#dc2626"}} title="Clear cooked log and out-of-stock marks. Pantry snapshot is not affected — it comes from the embedded data.">Reset</button>
-        </div>
+        <span>{lastReceiptDate ? `last receipt: ${formatDate(lastReceiptDate)}` : "no receipts yet"}</span>
+        {!showHelpBanner && <button onClick={()=>setShowHelpBanner(true)} className="pill" title="Reopen the introduction panel">? Help</button>}
       </div>
     </header>
 
@@ -3152,7 +3143,7 @@ function App(){
     {tab==="audit" && <AuditView pantry={pantry}/>}
 
     <footer className="text-xs text-stone-400 mt-8 text-center space-y-1">
-      <div>State saved locally in your browser{STORAGE_OK ? " ✓" : " ✗"} · paste cooked log back into a Claude session for canonical pantry updates</div>
+      <div>Synced to Supabase{STORAGE_OK ? " ✓" : " ✗"} across devices</div>
       <details className="inline-block">
         <summary className="cursor-pointer hover:text-stone-600 mono">v{SITE_VERSION} · changelog</summary>
         <div className="text-left mt-3 mx-auto max-w-2xl space-y-3 text-stone-600">
