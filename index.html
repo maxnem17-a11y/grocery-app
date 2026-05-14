@@ -90,9 +90,12 @@ const { useState, useMemo, useEffect, useCallback, useRef, createContext, useCon
 // (2) only apply changes not already listed, (3) append a new
 // entry below describing what they changed.
 // ============================================================
-const SITE_VERSION = "2026-05-14.4";
+const SITE_VERSION = "2026-05-14.5";
 const SITE_CHANGELOG = [
   // newest first
+  { version: "2026-05-14.5", date: "2026-05-14", changes: [
+    "Fixed TODAY hardcoding: was pinned to GENERATED_AT ('2026-05-11'), meaning all confidence decay, expiry countdowns, and delivery-date suggestions were calculated against a stale date. TODAY is now derived at runtime from new Date(), normalised to noon UTC to match the T12:00:00Z pattern used throughout. GENERATED_AT remains unchanged — it is a display label for the data snapshot, not a date calculation input.",
+  ]},
   { version: "2026-05-14.4", date: "2026-05-14", changes: [
     "Finished the receipts → Supabase migration. The module-level TESCO_ORDERS constant is gone; the four helpers that depended on it (buildPriceIndex, suggestNextDelivery, computeRegularsAndGaps, lookupPriceForIngredient) now take receipts as a parameter, and their callers (PlannerView, GapsView, App footer) pull receipts from ReceiptsContext via useContext. PlannerView's three useMemo hooks now list receipts as a dep, so the basket suggestion recomputes once the boot fetch lands.",
     "tesco_orders removed from the embedded raw-data JSON blob — 13 orders / 465 items / ~89KB. Page weight drops from ~530KB to ~440KB for first paint.",
@@ -235,7 +238,14 @@ const SUPABASE = {
 // ============================================================
 const RAW = JSON.parse(document.getElementById('raw-data').textContent);
 const GENERATED_AT = "2026-05-11";
-const TODAY = new Date(GENERATED_AT + "T12:00:00Z");
+// TODAY is always the real current date — derived at runtime so decay,
+// expiry, and delivery-date calculations stay accurate across sessions.
+// We normalise to noon UTC (matching the pattern used throughout the app)
+// to avoid date-boundary issues when the user's local timezone differs from UTC.
+const TODAY = (() => {
+  const d = new Date();
+  return new Date(d.toISOString().slice(0, 10) + "T12:00:00Z");
+})();
 
 // ===== Receipts context =====
 // Receipts are fetched from Supabase on mount and stored in React state.
