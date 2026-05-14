@@ -105,9 +105,16 @@ const { useState, useMemo, useEffect, useCallback, useRef, createContext, useCon
 // (2) only apply changes not already listed, (3) append a new
 // entry below describing what they changed.
 // ============================================================
-const SITE_VERSION = "2026-05-14.14";
+const SITE_VERSION = "2026-05-14.15";
 const SITE_CHANGELOG = [
   // newest first
+  { version: "2026-05-14.15", date: "2026-05-14", changes: [
+    "**Gaps tab sort fixes — Status and Last seen.** Reported as 'not sorting correctly'. Two distinct issues, fixed together.",
+    "**Status sort: root cause was zero variance on filtered views.** On the default 'Real gaps' filter every row has statusOrd = 0 (they're all gaps by construction — that's what makes them gaps). Same for 'Restocked', 'Excluded'. The sort was technically running but every comparison returned 0, so the tiebreaker (item name asc) took over and the click looked like a no-op. Fixed by computing `hasStatusVariance` from the visible rows and rendering the Status SortHeader as a disabled muted label when there's nothing to sort — with a title attribute explaining 'switch to All regulars to sort by status'. The sort still works on the 'All regulars' filter where statuses genuinely mix.",
+    "**Status sort: default direction flipped to asc.** Previously defaulted to desc, which on 'All regulars' put `excluded` rows on top (the least actionable) and gaps at the bottom (the most actionable). Now defaults to asc on first click: gap → in latest → in pantry → excluded. Matches the operator intuition of 'what should I act on first'. Second click reverses; third resets to default.",
+    "**Last seen sort: comparator hardened.** Replaced `new Date(a) - new Date(b)` with `Date.parse(a)` + NaN-aware comparison. The old form returned `NaN` for invalid input and JS sort treats NaN-comparisons as 0 — could have produced subtle order instability if any row had a missing or malformed date. Now: rows with missing/invalid dates explicitly sink to the bottom of asc (top of desc). All current data has clean ISO dates so this is defensive, not a fix for an observed crash — but a 14-row gap view will visibly reorder on click as expected.",
+    "**SortHeader gained `disabled` + `disabledReason` props.** Disabled headers render in `text-stone-300` with no cursor and an explanatory title, so they look greyed-out and explain why on hover. Same pattern available for other tables if a column ever needs to be conditionally inactive.",
+  ]},
   { version: "2026-05-14.14", date: "2026-05-14", changes: [
     "**Khalil allergen audit moved from Stats → Pantry tab.** The audit lists every current pantry item flagged `son_allergen` or `check`, with a chip showing which. It used to live as a permanent section at the bottom of the Stats tab — wrong tab, since the audit is about *current pantry state*, not library health. Now: the Khalil-allergen Stat KPI on the Pantry tab is clickable; clicking it expands an inline panel below the stats row with the same audit content. Click again (or the 'Hide' link) to collapse. Stats tab no longer renders the section; its unused `pantryAllergens` variable was removed.",
     "**`Stat` component gained optional `onClick` + `expanded` props.** When `onClick` is supplied the card becomes a button: cursor pointer, hover background, role=button, tabIndex=0, Enter/Space keyboard activation, ARIA aria-expanded. A small ▶/▼ chevron appears in the top-right of the card to signal it's expandable and reflect open state. Stat cards without an onClick are unchanged. The KPI's tooltip got a 'Click to see the full list' suffix so the affordance is also documented in the help text.",
@@ -869,10 +876,19 @@ function InfoTip({ children, align="center" }){
 // shows a small ▲/▼ chevron when this column is the active sort. The default Item
 // column starts as asc; a third click on the same column resets the table to the
 // default (Item asc) — handled by the toggleSort fn in PantryView.
-function SortHeader({ colSpan, sortKey, sortBy, sortDir, onClick, align="left", children }){
+function SortHeader({ colSpan, sortKey, sortBy, sortDir, onClick, align="left", children, disabled=false, disabledReason }){
   const active = sortBy === sortKey;
   const justify = align==="center" ? "justify-center" : align==="right" ? "justify-end" : "justify-start";
   const chevron = active ? (sortDir === "asc" ? "▲" : "▼") : "";
+  // When disabled (e.g. status sort on a single-status filter), render as a static label
+  // with a muted style and an explanatory title. No cursor, no click handler — the visual
+  // grey-out signals 'sorting here would have no visible effect'.
+  if (disabled) {
+    return <div
+      className={`col-span-${colSpan} flex items-center gap-1 select-none text-stone-300 ${justify}`}
+      title={disabledReason || "Sorting this column has no effect on the current view"}
+    >{children}</div>;
+  }
   return <div
     className={`col-span-${colSpan} flex items-center gap-1 cursor-pointer select-none hover:text-stone-700 ${justify}`}
     onClick={()=>onClick(sortKey)}
@@ -2506,7 +2522,13 @@ function GapsView({pantry, outOfStock}){
   const [regSortBy, setRegSortBy] = useState("count");
   const [regSortDir, setRegSortDir] = useState("desc");
   const toggleRegSort = (key) => {
-    if (regSortBy !== key) { setRegSortBy(key); setRegSortDir(key==="item"?"asc":"desc"); return; }
+    // Status defaults to asc (gap=0 first — most actionable on top). Item defaults to asc.
+    // All other columns (count, lastSeen) default to desc — biggest/most-recent first.
+    if (regSortBy !== key) {
+      setRegSortBy(key);
+      setRegSortDir((key==="item" || key==="status") ? "asc" : "desc");
+      return;
+    }
     if (regSortDir === "asc") { setRegSortDir("desc"); return; }
     setRegSortBy("count"); setRegSortDir("desc");
   };
@@ -2550,26 +2572,43 @@ function GapsView({pantry, outOfStock}){
                 : filter === "restocked" ? analysis.restocked
                 : filter === "excluded" ? analysis.excluded
                 : analysis.regulars;
-  // Status sort order: gap (most actionable) → in latest → in pantry → excluded.
+  // Status sort order: gap (most actionable) = 0 → in latest = 1 → in pantry = 2 → excluded = 3.
+  // Asc puts gaps on top (the useful default), desc puts excluded on top.
   const statusOrd = (r) => {
     if (r.excludedReason) return 3;
     if (r.inLatest) return 1;
     if (r.pantryItem) return 2;
     return 0; // gap
   };
+  // Does the current filter contain rows with more than one status? On "gap" / "restocked" /
+  // "excluded" filters every row collapses to a single statusOrd value — sorting by status
+  // is a no-op there. Used to grey out the Status header so the user knows clicking it
+  // won't do anything visible (the root cause of the 'status sort looks broken' report:
+  // it *was* sorting; there just wasn't any variance to act on).
+  const hasStatusVariance = useMemo(() => {
+    if (visibleRaw.length < 2) return false;
+    const first = statusOrd(visibleRaw[0]);
+    return visibleRaw.some(r => statusOrd(r) !== first);
+  }, [visibleRaw]);
   const visible = useMemo(() => {
     const sorted = [...visibleRaw].sort((a, b) => {
       let cmp = 0;
       switch (regSortBy) {
         case "count": cmp = (a.count||0) - (b.count||0); break;
         case "item": cmp = lc(a.example||"").localeCompare(lc(b.example||"")); break;
-        case "lastSeen":
-          // Null lastSeen sinks to bottom of asc.
-          if (!a.lastSeenDate && !b.lastSeenDate) cmp = 0;
-          else if (!a.lastSeenDate) cmp = 1;
-          else if (!b.lastSeenDate) cmp = -1;
-          else cmp = new Date(a.lastSeenDate) - new Date(b.lastSeenDate);
+        case "lastSeen": {
+          // Use Date.parse — returns NaN for invalid; coerce to -Infinity so missing
+          // dates sink to the bottom of asc (top of desc). Pure number subtraction is
+          // safer than `new Date(x) - new Date(y)` when inputs are dodgy.
+          const aT = a.lastSeenDate ? Date.parse(a.lastSeenDate) : NaN;
+          const bT = b.lastSeenDate ? Date.parse(b.lastSeenDate) : NaN;
+          const aOk = !isNaN(aT), bOk = !isNaN(bT);
+          if (!aOk && !bOk) cmp = 0;
+          else if (!aOk) cmp = 1;
+          else if (!bOk) cmp = -1;
+          else cmp = aT - bT;
           break;
+        }
         case "status": cmp = statusOrd(a) - statusOrd(b); break;
         default: cmp = 0;
       }
@@ -2653,7 +2692,9 @@ function GapsView({pantry, outOfStock}){
             <SortHeader colSpan={1} sortKey="count" sortBy={regSortBy} sortDir={regSortDir} onClick={toggleRegSort} align="center">×</SortHeader>
             <SortHeader colSpan={6} sortKey="item" sortBy={regSortBy} sortDir={regSortDir} onClick={toggleRegSort}>Item</SortHeader>
             <SortHeader colSpan={2} sortKey="lastSeen" sortBy={regSortBy} sortDir={regSortDir} onClick={toggleRegSort}>Last seen</SortHeader>
-            <SortHeader colSpan={3} sortKey="status" sortBy={regSortBy} sortDir={regSortDir} onClick={toggleRegSort} align="right">Status</SortHeader>
+            <SortHeader colSpan={3} sortKey="status" sortBy={regSortBy} sortDir={regSortDir} onClick={toggleRegSort} align="right"
+              disabled={!hasStatusVariance}
+              disabledReason={`All rows in the '${filter==="gap"?"Real gaps":filter==="restocked"?"Restocked / in pantry":filter==="excluded"?"Excluded":""}' view share the same status — switch to 'All regulars' to sort by status.`}>Status</SortHeader>
           </div>
           <div className="divide-y divide-stone-100">
             {visible.map((r,i)=> <div key={i} className="grid grid-cols-12 gap-2 items-center px-3 py-2 text-sm">
