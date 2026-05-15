@@ -110,9 +110,12 @@ const { useState, useMemo, useEffect, useCallback, useRef, createContext, useCon
 // (2) only apply changes not already listed, (3) append a new
 // entry below describing what they changed.
 // ============================================================
-const SITE_VERSION = "2026-05-15.23";
+const SITE_VERSION = "2026-05-15.24";
 const SITE_CHANGELOG = [
   // newest first
+  { version: "2026-05-15.24", date: "2026-05-15", changes: [
+    "**Planner section titles: descriptive tails appended.** Three section headers on the Planner tab got a long-dash descriptor after the snappy name shipped in v22, so the title reads both like a label and like a sentence. 'Everybody eats' → 'Everybody eats — Whole-household picks' (count chip preserved on the end). 'Gains (≥30g protein)' → 'Gains — High-protein options' (the parenthetical threshold was dropped to avoid stacking two qualifiers; threshold is still in the subtitle's tip and visible in the protein chips on each card). 'Quick wins' → 'Quick wins — Eat in under 25 mins' (puts the threshold back where it was before v22 dropped '≤25 min' from the title — turns out the user wanted that signal kept after all, just phrased differently). Subtitles and InfoTips unchanged. 'Going soon — expiring ≤5 days' was already in this shape from v22, left as-is.",
+  ]},
   { version: "2026-05-15.23", date: "2026-05-15", changes: [
     "**Gaps tab: KPI strip trimmed from 5 cards to 2.** Removed 'Orders tracked', 'Latest delivery', and 'Excluded by rules'. The strip was operational metadata about the receipt corpus, not actions to take — when the user is scanning this tab they're looking for what to add to the basket, not how many orders have been parsed. The two surviving cards ('Regulars (≥N)' and 'Real gaps') are the action axis: how many candidates exist and how many made it through filtering. Context that was on the removed cards (order count, latest delivery date + number, excluded-by-rule count and number of household rules) is folded into the InfoTips on the two surviving cards, so nothing is lost — just stops competing for attention. Grid shrinks from `sm:grid-cols-5` to `grid-cols-2`.",
     "**Gaps tab: subtitle added to 'Pick your basket gaps' section.** `subtitle=\"Regulars you buy often that are missing from your pantry\"`. The section header was a verb phrase with no explanation underneath — the explanatory bullets only showed once expanded. Subtitle now answers 'what is in this list' at a glance.",
@@ -2158,15 +2161,15 @@ function PlannerView({pantry, outOfStock, cooked}){
         <RecipeMicroList items={usesExpiring}/>
       </>}
     </Section>}
-    <Section title={`Everybody eats · ${wholeHousehold.length}`} tone="ok" subtitle="Top 6 by makeability — recipes you mostly already have ingredients for" collapsible defaultOpen={false}
+    <Section title={`Everybody eats — Whole-household picks · ${wholeHousehold.length}`} tone="ok" subtitle="Top 6 by makeability — recipes you mostly already have ingredients for" collapsible defaultOpen={false}
       tip="Recipes safe for everyone (Max, Emily, and Khalil), ranked by how much of the ingredient list you already have in the pantry.">
       <RecipeMicroList items={wholeHousehold}/>
     </Section>
-    <Section title="Gains (≥30g protein)" tone="info" subtitle="Top 6 by protein per serving — pescatarian-safe" collapsible defaultOpen={false}
+    <Section title="Gains — High-protein options" tone="info" subtitle="Top 6 by protein per serving — pescatarian-safe" collapsible defaultOpen={false}
       tip="Recipes Max can eat (no meat) that hit at least 30g protein per serving — useful for training days. Sorted by protein content, highest first.">
       <RecipeMicroList items={highProteinAdult}/>
     </Section>
-    <Section title="Quick wins" tone="accent" subtitle="At least 50% in-pantry and short total time" collapsible defaultOpen={false}
+    <Section title="Quick wins — Eat in under 25 mins" tone="accent" subtitle="At least 50% in-pantry and short total time" collapsible defaultOpen={false}
       tip="Fast meals (prep + cook ≤25 min) where you already have at least half the ingredients. Good for weeknight 'what can I make tonight'.">
       <RecipeMicroList items={quickMakeable}/>
     </Section>
