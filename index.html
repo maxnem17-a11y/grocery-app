@@ -93,7 +93,7 @@
   .legend-strip{ font-size:.7rem; color:#6b7280; }
   .legend-strip .lkey{ display:inline-flex; align-items:center; gap:.3rem; margin-right:.9rem; white-space:nowrap; }
   .legend-strip .lkey .sw{ width:8px; height:8px; border-radius:2px; display:inline-block; }
-  .tab-subtitle{ font-size:.75rem; color:#6b7280; margin-top:.5rem; margin-bottom:1rem; line-height:1.4; padding:0 .25rem; }
+  .tab-subtitle{ font-size:.75rem; color:#6b7280; margin-top:1.25rem; margin-bottom:1rem; line-height:1.4; padding:0 .25rem; }
 </style>
 </head>
 <body>
@@ -110,9 +110,17 @@ const { useState, useMemo, useEffect, useCallback, useRef, createContext, useCon
 // (2) only apply changes not already listed, (3) append a new
 // entry below describing what they changed.
 // ============================================================
-const SITE_VERSION = "2026-05-15.5";
+const SITE_VERSION = "2026-05-15.7";
 const SITE_CHANGELOG = [
   // newest first
+  { version: "2026-05-15.7", date: "2026-05-15", changes: [
+    "**Crash fix: `nextDelivery is not defined` in App.** App was rendering `<LarderBrand pantry={pantry} nextDelivery={nextDelivery} />` but `nextDelivery` only existed inside PlannerView — the App-scoped reference threw a ReferenceError that the ErrorBoundary caught, surfacing as 'Something went wrong rendering the page'. Pre-existing bug, not introduced by recent rounds — the LarderBrand prop was wired up before App ever computed the value. Fix: added `const nextDelivery = useMemo(() => suggestNextDelivery(receipts), [receipts])` in App, placed above the early-return so hook order stays consistent across renders.",
+  ]},
+  { version: "2026-05-15.6", date: "2026-05-15", changes: [
+    "**More breathing room between tabs and subtitle.** `.tab-subtitle` margin-top lifted from `.5rem` to `1.25rem` so the descriptive line under each tab no longer hugs the nav strip. Tab strip itself unchanged.",
+    "**Gaps tab: both sections collapsed by default.** The 'Pick your basket gaps' section (renamed from 'What this view does · pick your basket gaps') and the 'Ingredients that unlock the most recipes' section both default to closed now — Gaps lands as a clean KPI strip + two collapsed sections, mirroring how the Orders tab and Planner already behave. Click either header to expand.",
+    "**Orders tab: 'Unavailable items' section is now collapsible, default closed.** Same treatment given to Order history, Repeat-purchase patterns, and Khalil allergen exposure earlier — these are reference rather than action-required, so they shouldn't take up screen space until clicked.",
+  ]},
   { version: "2026-05-15.5", date: "2026-05-15", changes: [
     "**Tab icons (modern set).** Six monoline forest-green SVG icons rendered to the left of each tab label: planner (spiral notebook), recipes (open book), pantry (mini brand jar), gaps (basket + plus), Orders (parcel with tape cross), Stats (ascending bars). Icons are 16×16, stroke 1.4, `#1f4d2c` to match the brand palette. Sit inside the existing `.navtab` button via an inline-flex span with a 6px gap — no nav layout changes.",
     "**Brand-style sync via window event.** The brand toggle in `LarderBrand` now dispatches a `larder-brand-style-change` CustomEvent whenever the user switches between modern and retro. A new `useBrandStyle()` hook subscribes to that event, so any component (currently `TabIcon`) can stay in sync with the brand without prop-drilling through `App`. Same localStorage key (`larder-brand-style`) is still the source of truth on initial render.",
@@ -3258,6 +3266,7 @@ function OrdersView(){
     </Section>}
 
     {stats.unavails.length>0 && <Section title={`Unavailable items · ${stats.unavails.length}`} subtitle="Items ordered but not delivered"
+      collapsible defaultOpen={false}
       tip="Things you tried to order that Tesco couldn't fulfil and had no substitute for. Recurring entries usually mean a product is being phased out — worth finding an alternative.">
       <div className="space-y-1 text-xs">
         {stats.unavails.slice(0,20).map((u,i)=> <div key={i} className="card px-2.5 py-1.5 flex flex-wrap items-center gap-2">
@@ -3965,7 +3974,7 @@ function GapsView({pantry, outOfStock}){
             tip="Items the household has explicitly told the system not to suggest restocking (e.g. dairy milk — no one drinks it). View the rule list by clicking the 'Excluded' filter pill."/>
     </div>
 
-    <Section title="What this view does · pick your basket gaps" tone="info" collapsible
+    <Section title="Pick your basket gaps" tone="info" collapsible defaultOpen={false}
       tip="Compares the items you buy most often against what you currently have. Filters by category below.">
       <p className="text-sm text-stone-700 leading-relaxed">
         Spots items you buy regularly but don't currently have — so they're candidates for your next basket.
@@ -4055,6 +4064,7 @@ function GapsView({pantry, outOfStock}){
       subtitle="Ranked by how many household-safe recipes use each ingredient. Adding one boosts the makeability of every recipe listed below it."
       tone="accent"
       collapsible
+      defaultOpen={false}
       tip="A forward-looking view: rather than 'what should I buy this week', this asks 'what single ingredient would maximise the recipes I can make from existing pantry?'. Khalil-blocked recipes are excluded from the ranking."
     >
       <div className="flex flex-wrap items-center gap-3 mb-3">
@@ -4935,6 +4945,13 @@ function App(){
       </div>
     </div>;
   }
+  // Estimate next delivery date from receipt cadence — passed to LarderBrand so the
+  // pantry-status subtitle can say "Delivery in Nd · pantry X% full". Defined here at
+  // App-scope (rather than inside LarderBrand) because the same value is reused by
+  // PlannerView for the basket suggestion's `suggested_delivery_date` field.
+  // Must sit above the early-return below so hook order stays consistent across renders.
+  const nextDelivery = useMemo(() => suggestNextDelivery(receipts), [receipts]);
+
   if (!recipesLoaded || pantry.length === 0) {
     return <div className="max-w-2xl mx-auto px-4 sm:px-6 py-20">
       <div className="card p-6">
