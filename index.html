@@ -110,9 +110,15 @@ const { useState, useMemo, useEffect, useCallback, useRef, createContext, useCon
 // (2) only apply changes not already listed, (3) append a new
 // entry below describing what they changed.
 // ============================================================
-const SITE_VERSION = "2026-05-15.24";
+const SITE_VERSION = "2026-05-15.25";
 const SITE_CHANGELOG = [
   // newest first
+  { version: "2026-05-15.25", date: "2026-05-15", changes: [
+    "**Stats: 'Recipe page-number coverage' drilldown.** Each row in the per-book breakdown is now clickable — expands inline to show the recipes in that book that are missing a page number (alphabetised within the book). Each recipe row gets an inline `<input type=\"number\">` for the page; tab or Enter to save locally. Pending edits are tracked with a small ● next to the input and a `+N` chip on the book row header so you can see at a glance which books have unsaved work. Click the row header again (or another book's header) to collapse — only one book expands at a time to keep the section compact.",
+    "**Why local-first, not direct write.** The `recipes` table on Supabase requires the service role to write (RLS — same posture as v14.5 set up). The page only carries the anon key, so a direct PATCH would 401, and embedding the service-role key client-side would grant anyone-with-the-page-source full write access to the household DB. So edits live in `localStorage` under `grocery-intelligence-v1:page-edits` (separate from the pantry blob — different lifecycle and a separate `clear` action). When you have pending edits, an amber banner sits above the breakdown with **Export updates** and **Discard** buttons. Export opens a modal with a generated `UPDATE recipes SET source_page = N WHERE id = '…';` line per pending edit — copyable in one click. Paste into the Supabase SQL Editor (or a Claude session) to apply, then hit **Mark as applied** in the modal to clear local state. KPI counts stay computed off canonical RECIPES, so the section keeps showing the real gap until you actually run the export and reload.",
+    "**UX details.** Books with `missing === 0` render at 60% opacity and aren't clickable — nothing to drill into. Input is `min=\"1\"` so an empty/zero/negative value removes the pending edit (covers 'I changed my mind' without needing a separate undo). Modal closes on backdrop click and on ×. **Mark as applied** wraps a `confirm()` because it nukes all pending edits at once — easy to mis-tap. **Discard** in the banner is the same destructive action but for users who haven't opened the modal.",
+    "**Backlog**: option to apply via a small server-side proxy (Cloudflare Worker or similar) holding the service key — would turn this from copy-paste into direct save. Not done now; the export flow is good enough for a once-or-twice-then-done batch of page-tagging.",
+  ]},
   { version: "2026-05-15.24", date: "2026-05-15", changes: [
     "**Planner section titles: descriptive tails appended.** Three section headers on the Planner tab got a long-dash descriptor after the snappy name shipped in v22, so the title reads both like a label and like a sentence. 'Everybody eats' → 'Everybody eats — Whole-household picks' (count chip preserved on the end). 'Gains (≥30g protein)' → 'Gains — High-protein options' (the parenthetical threshold was dropped to avoid stacking two qualifiers; threshold is still in the subtitle's tip and visible in the protein chips on each card). 'Quick wins' → 'Quick wins — Eat in under 25 mins' (puts the threshold back where it was before v22 dropped '≤25 min' from the title — turns out the user wanted that signal kept after all, just phrased differently). Subtitles and InfoTips unchanged. 'Going soon — expiring ≤5 days' was already in this shape from v22, left as-is.",
   ]},
@@ -4380,15 +4386,72 @@ function AuditView({pantry, cooked, outOfStock}){
     const groups = new Map();
     bookRecipes.forEach(r => {
       const title = (r.source.title || "Unknown").trim();
-      if (!groups.has(title)) groups.set(title, { title, total: 0, missing: 0 });
+      if (!groups.has(title)) groups.set(title, { title, total: 0, missing: 0, missingRecipes: [] });
       const g = groups.get(title);
       g.total += 1;
-      if (r.source.page == null || r.source.page === "" || r.source.page === 0) g.missing += 1;
+      if (r.source.page == null || r.source.page === "" || r.source.page === 0) {
+        g.missing += 1;
+        g.missingRecipes.push({ id: r.id, name: r.name });
+      }
     });
+    // Sort recipes within each book alphabetically for predictable listing.
+    groups.forEach(g => g.missingRecipes.sort((a, b) => a.name.localeCompare(b.name)));
     return [...groups.values()]
       .map(g => ({ ...g, completePct: g.total ? Math.round(100 * (g.total - g.missing) / g.total) : 100 }))
       .sort((a, b) => b.missing - a.missing); // worst offenders first
   }, [bookRecipes]);
+
+  // ── Page-number editing UI ──
+  // Edits live in localStorage under a dedicated sub-key (not the main pantry
+  // blob — different lifecycle). The Supabase recipes table requires the
+  // service role to write, and the page only has the anon key, so we can't
+  // PATCH directly from here. The workflow is: collect edits locally → user
+  // exports as a SQL snippet → paste into Supabase SQL Editor (or a Claude
+  // session) to apply. KPI cards stay computed from canonical RECIPES so the
+  // "missing" count doesn't drop until you actually run the export — that
+  // way the section keeps surfacing the real gap, not a phantom one.
+  const PAGE_EDITS_KEY = LS_KEY + ':page-edits';
+  const [pageEdits, setPageEdits] = useState(() => {
+    try {
+      const raw = localStorage.getItem(PAGE_EDITS_KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch { return {}; }
+  });
+  const [expandedBook, setExpandedBook] = useState(null);
+  const [showExportModal, setShowExportModal] = useState(false);
+
+  // Persist edits whenever they change.
+  useEffect(() => {
+    if (!STORAGE_OK) return;
+    try { localStorage.setItem(PAGE_EDITS_KEY, JSON.stringify(pageEdits)); } catch {}
+  }, [pageEdits]);
+
+  const setPageEdit = (recipeId, value) => {
+    setPageEdits(prev => {
+      const next = { ...prev };
+      // Coerce empty / invalid input to a removal.
+      const n = parseInt(value, 10);
+      if (!value || isNaN(n) || n <= 0) {
+        delete next[recipeId];
+      } else {
+        next[recipeId] = n;
+      }
+      return next;
+    });
+  };
+  const clearAllEdits = () => setPageEdits({});
+
+  const pendingEditCount = Object.keys(pageEdits).length;
+  // Build the SQL snippet for the export modal. Recipe IDs from Supabase are
+  // UUIDs — quote them as strings. One UPDATE per row keeps it readable and
+  // makes individual failures obvious if a recipe id has been deleted upstream.
+  const exportSQL = useMemo(() => {
+    if (!pendingEditCount) return "-- no pending edits";
+    const lines = Object.entries(pageEdits).map(([id, page]) => {
+      return `UPDATE recipes SET source_page = ${page} WHERE id = '${id}';`;
+    });
+    return lines.join("\n");
+  }, [pageEdits, pendingEditCount]);
   // Pantry composition + confidence health by category. Combines task 2A (counts
   // and share-of-pantry) with task 2B (avg confidence and expiring-soon count) in
   // one rollup. Items without a category are bucketed under "uncategorised" so the
@@ -4474,7 +4537,16 @@ function AuditView({pantry, cooked, outOfStock}){
           tip="Percentage of book recipes with a page number recorded. 100% means every book recipe in the library cross-references its source page."/>
       </div>
       {missingByBook.some(b => b.missing > 0) && <>
-        <div className="text-xs text-stone-500 mb-2 uppercase tracking-wider">By book — worst offenders first</div>
+        {pendingEditCount > 0 && <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 mb-3 flex flex-wrap items-center justify-between gap-2">
+          <span className="text-xs text-amber-800">
+            <strong>{pendingEditCount} pending edit{pendingEditCount === 1 ? "" : "s"}</strong> — saved locally on this device. The KPI counts above won't drop until you apply the export.
+          </span>
+          <div className="flex gap-1.5">
+            <button onClick={()=>setShowExportModal(true)} className="px-2.5 py-1 rounded bg-amber-700 hover:bg-amber-800 text-white text-xs">Export updates</button>
+            <button onClick={clearAllEdits} className="px-2.5 py-1 rounded border border-amber-300 hover:bg-amber-100 text-amber-800 text-xs" title="Discard all pending page-number edits on this device">Discard</button>
+          </div>
+        </div>}
+        <div className="text-xs text-stone-500 mb-2 uppercase tracking-wider">By book — worst offenders first · click a row to add page numbers</div>
         <div className="space-y-1">
           <div className="grid grid-cols-12 gap-2 items-center text-[11px] text-stone-500 uppercase tracking-wider px-1">
             <div className="col-span-5">Book</div>
@@ -4482,13 +4554,94 @@ function AuditView({pantry, cooked, outOfStock}){
             <div className="col-span-3">Coverage</div>
             <div className="col-span-2 text-right">% complete</div>
           </div>
-          {missingByBook.map(b => <div key={b.title} className="grid grid-cols-12 gap-2 items-center text-sm">
-            <div className="col-span-5 font-medium truncate" title={b.title}>{b.title}</div>
-            <div className={`col-span-2 text-right mono text-xs ${b.missing > 0 ? "text-amber-700 font-semibold" : "text-stone-400"}`}>{b.missing} / {b.total}</div>
-            <div className="col-span-3"><Bar pct={b.completePct}/></div>
-            <div className="col-span-2 text-right mono text-xs text-stone-500">{b.completePct}%</div>
-          </div>)}
+          {missingByBook.map(b => {
+            const isOpen = expandedBook === b.title;
+            const editedInThisBook = b.missingRecipes.filter(r => pageEdits[r.id] != null).length;
+            return <div key={b.title} className="border-b border-stone-100 last:border-0">
+              <div
+                role="button" tabIndex={0}
+                onClick={()=>setExpandedBook(isOpen ? null : b.title)}
+                onKeyDown={(e)=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); setExpandedBook(isOpen ? null : b.title); } }}
+                className={`grid grid-cols-12 gap-2 items-center text-sm py-1.5 cursor-pointer select-none hover:bg-stone-50 ${b.missing === 0 ? "opacity-60" : ""}`}
+                title={b.missing > 0 ? "Click to see recipes missing page numbers" : "All recipes in this book are tagged"}
+              >
+                <div className="col-span-5 font-medium truncate flex items-center gap-1.5" title={b.title}>
+                  {b.missing > 0 && <span className="text-stone-400 text-xs shrink-0">{isOpen ? '▼' : '▶'}</span>}
+                  {b.missing === 0 && <span className="text-stone-300 text-xs shrink-0">·</span>}
+                  <span className="truncate">{b.title}</span>
+                  {editedInThisBook > 0 && <span className="text-[10px] text-amber-700 bg-amber-100 rounded px-1.5 py-0.5 shrink-0" title={`${editedInThisBook} pending local edit${editedInThisBook === 1 ? "" : "s"} in this book`}>+{editedInThisBook}</span>}
+                </div>
+                <div className={`col-span-2 text-right mono text-xs ${b.missing > 0 ? "text-amber-700 font-semibold" : "text-stone-400"}`}>{b.missing} / {b.total}</div>
+                <div className="col-span-3"><Bar pct={b.completePct}/></div>
+                <div className="col-span-2 text-right mono text-xs text-stone-500">{b.completePct}%</div>
+              </div>
+              {isOpen && b.missing > 0 && <div className="bg-stone-50 rounded px-3 py-2 my-1 space-y-1">
+                <div className="text-[10px] text-stone-500 uppercase tracking-wider mb-1.5">
+                  {b.missingRecipes.length} recipe{b.missingRecipes.length === 1 ? "" : "s"} need{b.missingRecipes.length === 1 ? "s" : ""} a page number — enter a number and tab/click away to save locally
+                </div>
+                {b.missingRecipes.map(r => {
+                  const editVal = pageEdits[r.id];
+                  return <div key={r.id} className="grid grid-cols-12 gap-2 items-center text-sm py-0.5">
+                    <div className="col-span-9 truncate" title={r.name}>{r.name}</div>
+                    <div className="col-span-3 flex items-center justify-end gap-1.5">
+                      <input
+                        type="number"
+                        min="1"
+                        placeholder="page"
+                        defaultValue={editVal ?? ""}
+                        onBlur={(e)=>setPageEdit(r.id, e.target.value)}
+                        onKeyDown={(e)=>{ if(e.key==='Enter'){ e.target.blur(); } }}
+                        className="w-16 px-2 py-0.5 text-xs border border-stone-300 rounded mono text-right focus:outline-none focus:border-amber-500"
+                        title="Enter the page number, then Tab or click away to save (locally on this device)"
+                      />
+                      {editVal != null && <span className="text-[10px] text-amber-700" title="Pending — unsaved to Supabase">●</span>}
+                    </div>
+                  </div>;
+                })}
+              </div>}
+            </div>;
+          })}
         </div>
+        {showExportModal && <div
+          role="dialog" aria-modal="true"
+          onClick={(e)=>{ if (e.target === e.currentTarget) setShowExportModal(false); }}
+          className="fixed inset-0 bg-stone-900/40 flex items-center justify-center p-4 z-50"
+        >
+          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[80vh] overflow-hidden flex flex-col">
+            <div className="px-4 py-3 border-b border-stone-200 flex items-center justify-between">
+              <h3 className="font-semibold text-sm">Export {pendingEditCount} page-number update{pendingEditCount === 1 ? "" : "s"}</h3>
+              <button onClick={()=>setShowExportModal(false)} className="text-stone-400 hover:text-stone-700 text-xl leading-none">×</button>
+            </div>
+            <div className="px-4 py-3 text-xs text-stone-600 border-b border-stone-100 leading-relaxed">
+              The dashboard can't write to the <code className="mono">recipes</code> table directly (anon key is read-only by RLS). Copy this SQL and run it in the Supabase SQL Editor — or paste it to a Claude session and ask it to apply. Once it's run successfully, click <strong>"Mark as applied"</strong> below to clear local state. The KPI counts will update on the next page load.
+            </div>
+            <textarea
+              readOnly
+              value={exportSQL}
+              className="flex-1 mono text-xs p-3 bg-stone-50 border-0 resize-none focus:outline-none min-h-[200px]"
+              onFocus={(e)=>e.target.select()}
+            />
+            <div className="px-4 py-3 border-t border-stone-200 flex flex-wrap items-center justify-end gap-2">
+              <button
+                onClick={()=>{
+                  if (navigator.clipboard) {
+                    navigator.clipboard.writeText(exportSQL).catch(()=>{});
+                  }
+                }}
+                className="px-3 py-1.5 rounded border border-stone-300 hover:bg-stone-50 text-xs"
+              >Copy SQL</button>
+              <button
+                onClick={()=>{
+                  if (confirm(`Mark all ${pendingEditCount} pending edits as applied and clear local state? Do this only after running the SQL successfully.`)) {
+                    clearAllEdits();
+                    setShowExportModal(false);
+                  }
+                }}
+                className="px-3 py-1.5 rounded bg-emerald-700 hover:bg-emerald-800 text-white text-xs"
+              >Mark as applied</button>
+            </div>
+          </div>
+        </div>}
       </>}
     </Section>
 
