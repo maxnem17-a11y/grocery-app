@@ -110,9 +110,16 @@ const { useState, useMemo, useEffect, useCallback, useRef, createContext, useCon
 // (2) only apply changes not already listed, (3) append a new
 // entry below describing what they changed.
 // ============================================================
-const SITE_VERSION = "2026-05-15.27";
+const SITE_VERSION = "2026-05-15.28";
 const SITE_CHANGELOG = [
   // newest first
+  { version: "2026-05-15.28", date: "2026-05-15", changes: [
+    "**Page numbers now save directly to Supabase, with edit affordance on the Recipes tab itself.** Two coordinated changes that close out the page-number editing flow first opened in v25.",
+    "**1. Recipes tab — pencil icon on the source chip.** Book-sourced recipes show their page on the chip directly (e.g. `East · p.115` instead of just `East`). A small ✏️ button next to the chip swaps it for an inline `<input type=\"number\">`. Type the page, Tab or Enter to save, Esc to cancel. Works symmetrically for both adding a missing page and correcting an existing one — same affordance, same save path. Failures show a red dot ● next to the chip. Pencil only appears on book-typed sources (web/instagram recipes don't have page numbers).",
+    "**2. Direct save replaces export-to-SQL.** The Stats-tab drilldown (added v25) used to collect edits in localStorage and offer an SQL export, because the v14.5 changelog claimed `public.recipes` required service role to write. v27's MCP poke at `pg_class.relrowsecurity` revealed that's not actually true — RLS on `recipes` is off, so anon PATCHes succeed. Replaced the local-edit + amber banner + export modal flow with optimistic direct save via a new `patchRecipeRow` helper (mirrors `patchPantryRow`). Removed: `PAGE_EDITS_KEY` localStorage key, `pageEdits` state + persistence effect, `setPageEdit` / `clearAllEdits` handlers, the SQL `exportSQL` useMemo, `pendingEditCount` counter, the amber pending-edits banner, and the entire SQL export modal. Net delete of ~120 lines.",
+    "**Re-render plumbing.** Added `recipesVersion` integer to App state, bumped on every successful recipe mutation. `RecipesView` and `AuditView`'s `decorated` / page-coverage `useMemo` deps now include it, so a save on either tab refreshes both views in place (the saved row drops out of the Stats-tab missing list; the Recipes-tab chip shows the new page suffix). The module-level `RECIPES` array remains the canonical store — `recipesVersion` is just a referential-change trigger for React.",
+    "**RLS on `recipes` remains a parked todo (since v14.10).** The page only carries the anon key, so direct write works today only because RLS is off. Once you enable RLS, the right policy is a narrow `UPDATE` policy permitting anon to mutate `source_page` only, leaving the rest of the table read-only. The `patchRecipeRow` helper doesn't need to change when that lands — it'll just start 401-ing for any field other than `source_page`, which is the correct outcome.",
+  ]},
   { version: "2026-05-15.27", date: "2026-05-15", changes: [
     "**Supabase migration ran.** The `in_freezer` column added by v26 was applied to the canonical `public.pantry_items` table directly via the Supabase MCP connector (not via the SQL Editor as v26's draft note suggested — and the table is `pantry_items`, not `pantry`; v26's note had it wrong because the changelog text drifted from the actual code, which has always PATCHed `pantry_items`). Verified: column is `boolean NOT NULL DEFAULT false`, all 86 rows default to false. The `_in_freezer` Supabase passthrough on `mapPantryRow` and the `in_freezer` field in `patchPantryRow` calls now have a real column to land in — the schema-fallback warning path in `toggleInFreezer` becomes dead code on this Supabase project, but stays in place as defence-in-depth in case a future schema change ever removes the column.",
   ]},
@@ -582,6 +589,30 @@ async function sbFetch(path) {
 async function patchPantryRow(id, fields) {
   if (!id) throw new Error("patchPantryRow: missing id");
   const res = await fetch(`${SUPABASE.url}/rest/v1/pantry_items?id=eq.${id}`, {
+    method: "PATCH",
+    headers: {
+      apikey: SUPABASE.anonKey,
+      Authorization: `Bearer ${SUPABASE.anonKey}`,
+      "Content-Type": "application/json",
+      Prefer: "return=representation",
+    },
+    body: JSON.stringify(fields),
+  });
+  if (!res.ok) throw new Error(`Supabase PATCH ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+// PATCH a single recipe row by id. Mirrors patchPantryRow but hits the
+// `recipes` table. As of v27, public.recipes has RLS disabled, so anon
+// PATCHes succeed — this is fine for the narrow case of editing source_page
+// (the data-quality task this helper exists for), but it does mean any
+// recipe field is writeable from the page. Parked todo (since v14.10):
+// enable RLS on recipes with a narrow source_page-only update policy. When
+// that lands, callers that try to write other fields will start failing,
+// which is the correct outcome — this helper itself doesn't need to change.
+async function patchRecipeRow(id, fields) {
+  if (!id) throw new Error("patchRecipeRow: missing id");
+  const res = await fetch(`${SUPABASE.url}/rest/v1/recipes?id=eq.${id}`, {
     method: "PATCH",
     headers: {
       apikey: SUPABASE.anonKey,
@@ -1557,12 +1588,19 @@ function PantryView({pantry, outOfStock, toggleOutOfStock, inFreezer, toggleInFr
 }
 
 // ===== Recipes view =====
-function RecipesView({pantry, outOfStock, cooked, addCooked, eaterFilter, setEaterFilter, cookedSyncErrors}){
+function RecipesView({pantry, outOfStock, cooked, addCooked, eaterFilter, setEaterFilter, cookedSyncErrors, updateRecipePage, recipesVersion}){
   const [q, setQ] = useState("");
   const [source, setSource] = useState("all");
   const [sortBy, setSortBy] = useState("makeable");
   const [minMakeable, setMinMakeable] = useState(0);
   const [expanded, setExpanded] = useState(null);
+  // Which row's page chip is currently in edit mode. Null when nothing is being
+  // edited. We allow only one row at a time — clicking another pencil moves the
+  // edit focus rather than opening parallel inputs.
+  const [editingPage, setEditingPage] = useState(null);
+  // Per-row sync error indicator for failed PATCHes — mirrors the pattern used
+  // in PantryView's syncErrors prop.
+  const [pageSyncErrors, setPageSyncErrors] = useState({}); // {recipeId: message}
 
   const allergens = useContext(AllergensContext);
   const matchSet = useMemo(()=> pantryMatchSet(pantry, outOfStock), [pantry, outOfStock]);
@@ -1571,7 +1609,7 @@ function RecipesView({pantry, outOfStock, cooked, addCooked, eaterFilter, setEat
     const f = flagsForRecipe(r, allergens);
     const aud = r.audience || audienceFromFlags(f);
     return {...r, _make:m, _flags:f, _audience:aud};
-  }), [matchSet, allergens]);
+  }), [matchSet, allergens, recipesVersion]);
 
   const sources = [...new Set(RECIPES.map(r=>r._source_file))].sort();
   const cookedSet = useMemo(()=> new Set(cooked.map(c=>c.meal_id)), [cooked]);
@@ -1644,13 +1682,62 @@ function RecipesView({pantry, outOfStock, cooked, addCooked, eaterFilter, setEat
         const total = (r.prep_time_mins||0)+(r.cook_time_mins||0);
         const open = expanded === r.id;
         const wasCooked = cookedSet.has(r.id);
-        // Format source: "East p.115" for books, just file slug for web/instagram
-        const sourceLabel = r.source && r.source.type === "book"
-          ? (r.source.title || "Book")
+        // Source chip format. For books we show "East · p.115" when a page
+        // exists, "East" alone otherwise. Web/instagram recipes just show
+        // their source file slug. Book sources get a pencil-icon edit
+        // affordance next to the chip (see chipSlot below) — clicking it
+        // swaps chip+pencil for an inline input. The input commits on blur
+        // or Enter via updateRecipePage (direct save to Supabase since v28).
+        const isBook = r.source && r.source.type === "book";
+        const currentPage = (r.source && r.source.page) || null;
+        const sourceLabel = isBook
+          ? `${r.source.title || "Book"}${currentPage ? ` · p.${currentPage}` : ""}`
           : r._source_file;
+        const isEditingThis = editingPage === r.id;
+        const syncErr = pageSyncErrors[r.id];
+        // The chip / edit-input slot. Stays inside the same parent
+        // role="button" but onClick handlers stopPropagation so the row
+        // doesn't expand/collapse while interacting.
+        const chipSlot = isEditingThis
+          ? <span className="flex items-center gap-1" onClick={(e)=>e.stopPropagation()}>
+              <span className="text-xs text-stone-500 mono">{r.source.title || "Book"} · p.</span>
+              <input
+                type="number"
+                min="1"
+                autoFocus
+                defaultValue={currentPage ?? ""}
+                placeholder="page"
+                onBlur={(e)=>{
+                  const val = e.target.value;
+                  // Empty blur with no prior value: just cancel out of edit mode.
+                  if (!val && currentPage == null) { setEditingPage(null); return; }
+                  setPageSyncErrors(prev => { const n = {...prev}; delete n[r.id]; return n; });
+                  updateRecipePage(r.id, val, {
+                    onError: () => setPageSyncErrors(prev => ({ ...prev, [r.id]: "Couldn't save — try again" })),
+                  });
+                  setEditingPage(null);
+                }}
+                onKeyDown={(e)=>{
+                  if(e.key === 'Enter'){ e.target.blur(); }
+                  if(e.key === 'Escape'){ setEditingPage(null); }
+                }}
+                className="w-16 px-2 py-0.5 text-xs border border-amber-400 rounded mono text-right focus:outline-none focus:border-amber-600"
+                title="Enter the page number, then Tab/Enter to save, Esc to cancel"
+              />
+            </span>
+          : <span className="flex items-center gap-1">
+              <Chip tone="neutral" title="Source — book + page, or website">{sourceLabel}</Chip>
+              {isBook && <button
+                onClick={(e)=>{ e.preventDefault(); e.stopPropagation(); setEditingPage(r.id); }}
+                className="text-stone-400 hover:text-amber-700 text-xs leading-none px-1 py-0.5 rounded hover:bg-amber-50"
+                title={currentPage ? "Edit page number" : "Add page number"}
+                aria-label={currentPage ? "Edit page number" : "Add page number"}
+              >✏️</button>}
+              {syncErr && <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500" title={syncErr}></span>}
+            </span>;
         return <div key={r.id} className="card">
           <div role="button" tabIndex={0}
-               onClick={(e)=>{ if(e.target.closest('button,a')) return; setExpanded(open?null:r.id); }}
+               onClick={(e)=>{ if(e.target.closest('button,a,input')) return; setExpanded(open?null:r.id); }}
                onKeyDown={(e)=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); setExpanded(open?null:r.id);} }}
                className="px-4 py-3 flex items-center gap-3 flex-wrap cursor-pointer select-none">
             <div className="font-medium flex-1 min-w-[200px] flex items-start justify-between gap-2">
@@ -1659,7 +1746,7 @@ function RecipesView({pantry, outOfStock, cooked, addCooked, eaterFilter, setEat
               </span>
               <span className="text-xs text-stone-400 shrink-0 sm:hidden">{open?'▲':'▼'}</span>
             </div>
-            <Chip tone="neutral" title="Source — book + page, or website">{sourceLabel}</Chip>
+            {chipSlot}
             <AudienceTag a={r._audience}/>
             {(r.protein_per_serving_g!=null) && <Chip tone={r.protein_per_serving_g>=45?"ok":r.protein_per_serving_g>=20?"info":"neutral"} title="Protein per serving — green ≥45g (Max training-day target), blue ≥20g, grey lower">{r.protein_per_serving_g}g protein</Chip>}
             {total>0 && <Chip tone={total<=20?"ok":total<=40?"neutral":"warn"} title="Prep + cook time">{total}m total</Chip>}
@@ -4366,7 +4453,7 @@ function GapsView({pantry, outOfStock}){
 }
 
 // ===== Audit view =====
-function AuditView({pantry, cooked, outOfStock}){
+function AuditView({pantry, cooked, outOfStock, updateRecipePage, recipesVersion}){
   const allergens = useContext(AllergensContext);
   const receipts = useContext(ReceiptsContext);
   // Global counters shown at the very top of the tab — moved here from the App
@@ -4380,7 +4467,7 @@ function AuditView({pantry, cooked, outOfStock}){
   const decorated = useMemo(()=> RECIPES.map(r=>{
     const f = flagsForRecipe(r, allergens);
     return {...r, _flags:f, _audience: r.audience || audienceFromFlags(f)};
-  }), [allergens]);
+  }), [allergens, recipesVersion]);
 
   const byAudience = {
     "whole-household": decorated.filter(r=>r._audience==="whole-household"),
@@ -4410,13 +4497,15 @@ function AuditView({pantry, cooked, outOfStock}){
   // books need a pass to add page refs, which is helpful when cross-referencing
   // a recipe in the physical book during cooking. Excludes web/instagram/other
   // source types — those don't have page numbers by nature.
-  const bookRecipes = RECIPES.filter(r => r.source && r.source.type === "book");
-  const missingPage = bookRecipes.filter(r => r.source.page == null || r.source.page === "" || r.source.page === 0);
-  const pagePct = bookRecipes.length ? Math.round(100 * (bookRecipes.length - missingPage.length) / bookRecipes.length) : 100;
-  // Group the missing-page recipes by book title for the per-book breakdown.
-  const missingByBook = useMemo(() => {
+  // Wrapped in useMemo + keyed on recipesVersion so a row save by either this
+  // tab's drilldown or the Recipes-tab pencil affordance triggers a recompute,
+  // which drops the missing count and updates the KPI cards in place.
+  const { bookRecipes, missingPage, pagePct, missingByBook } = useMemo(() => {
+    const books = RECIPES.filter(r => r.source && r.source.type === "book");
+    const missing = books.filter(r => r.source.page == null || r.source.page === "" || r.source.page === 0);
+    const pct = books.length ? Math.round(100 * (books.length - missing.length) / books.length) : 100;
     const groups = new Map();
-    bookRecipes.forEach(r => {
+    books.forEach(r => {
       const title = (r.source.title || "Unknown").trim();
       if (!groups.has(title)) groups.set(title, { title, total: 0, missing: 0, missingRecipes: [] });
       const g = groups.get(title);
@@ -4426,64 +4515,21 @@ function AuditView({pantry, cooked, outOfStock}){
         g.missingRecipes.push({ id: r.id, name: r.name });
       }
     });
-    // Sort recipes within each book alphabetically for predictable listing.
     groups.forEach(g => g.missingRecipes.sort((a, b) => a.name.localeCompare(b.name)));
-    return [...groups.values()]
+    const byBook = [...groups.values()]
       .map(g => ({ ...g, completePct: g.total ? Math.round(100 * (g.total - g.missing) / g.total) : 100 }))
       .sort((a, b) => b.missing - a.missing); // worst offenders first
-  }, [bookRecipes]);
+    return { bookRecipes: books, missingPage: missing, pagePct: pct, missingByBook: byBook };
+  }, [recipesVersion]);
 
-  // ── Page-number editing UI ──
-  // Edits live in localStorage under a dedicated sub-key (not the main pantry
-  // blob — different lifecycle). The Supabase recipes table requires the
-  // service role to write, and the page only has the anon key, so we can't
-  // PATCH directly from here. The workflow is: collect edits locally → user
-  // exports as a SQL snippet → paste into Supabase SQL Editor (or a Claude
-  // session) to apply. KPI cards stay computed from canonical RECIPES so the
-  // "missing" count doesn't drop until you actually run the export — that
-  // way the section keeps surfacing the real gap, not a phantom one.
-  const PAGE_EDITS_KEY = LS_KEY + ':page-edits';
-  const [pageEdits, setPageEdits] = useState(() => {
-    try {
-      const raw = localStorage.getItem(PAGE_EDITS_KEY);
-      return raw ? JSON.parse(raw) : {};
-    } catch { return {}; }
-  });
+  // ── Drilldown UI state ──
+  // Local-edit + export-to-SQL flow was removed in v28 — now that RLS on
+  // public.recipes is confirmed off, the dashboard can PATCH source_page
+  // directly via updateRecipePage. State that remains: which book row is
+  // expanded, and a per-recipe in-flight/error flag so the row can show a
+  // pending state during the network round-trip.
   const [expandedBook, setExpandedBook] = useState(null);
-  const [showExportModal, setShowExportModal] = useState(false);
-
-  // Persist edits whenever they change.
-  useEffect(() => {
-    if (!STORAGE_OK) return;
-    try { localStorage.setItem(PAGE_EDITS_KEY, JSON.stringify(pageEdits)); } catch {}
-  }, [pageEdits]);
-
-  const setPageEdit = (recipeId, value) => {
-    setPageEdits(prev => {
-      const next = { ...prev };
-      // Coerce empty / invalid input to a removal.
-      const n = parseInt(value, 10);
-      if (!value || isNaN(n) || n <= 0) {
-        delete next[recipeId];
-      } else {
-        next[recipeId] = n;
-      }
-      return next;
-    });
-  };
-  const clearAllEdits = () => setPageEdits({});
-
-  const pendingEditCount = Object.keys(pageEdits).length;
-  // Build the SQL snippet for the export modal. Recipe IDs from Supabase are
-  // UUIDs — quote them as strings. One UPDATE per row keeps it readable and
-  // makes individual failures obvious if a recipe id has been deleted upstream.
-  const exportSQL = useMemo(() => {
-    if (!pendingEditCount) return "-- no pending edits";
-    const lines = Object.entries(pageEdits).map(([id, page]) => {
-      return `UPDATE recipes SET source_page = ${page} WHERE id = '${id}';`;
-    });
-    return lines.join("\n");
-  }, [pageEdits, pendingEditCount]);
+  const [rowSyncErrors, setRowSyncErrors] = useState({}); // {recipeId: errorMessage}
   // Pantry composition + confidence health by category. Combines task 2A (counts
   // and share-of-pantry) with task 2B (avg confidence and expiring-soon count) in
   // one rollup. Items without a category are bucketed under "uncategorised" so the
@@ -4569,15 +4615,6 @@ function AuditView({pantry, cooked, outOfStock}){
           tip="Percentage of book recipes with a page number recorded. 100% means every book recipe in the library cross-references its source page."/>
       </div>
       {missingByBook.some(b => b.missing > 0) && <>
-        {pendingEditCount > 0 && <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 mb-3 flex flex-wrap items-center justify-between gap-2">
-          <span className="text-xs text-amber-800">
-            <strong>{pendingEditCount} pending edit{pendingEditCount === 1 ? "" : "s"}</strong> — saved locally on this device. The KPI counts above won't drop until you apply the export.
-          </span>
-          <div className="flex gap-1.5">
-            <button onClick={()=>setShowExportModal(true)} className="px-2.5 py-1 rounded bg-amber-700 hover:bg-amber-800 text-white text-xs">Export updates</button>
-            <button onClick={clearAllEdits} className="px-2.5 py-1 rounded border border-amber-300 hover:bg-amber-100 text-amber-800 text-xs" title="Discard all pending page-number edits on this device">Discard</button>
-          </div>
-        </div>}
         <div className="text-xs text-stone-500 mb-2 uppercase tracking-wider">By book — worst offenders first · click a row to add page numbers</div>
         <div className="space-y-1">
           <div className="grid grid-cols-12 gap-2 items-center text-[11px] text-stone-500 uppercase tracking-wider px-1">
@@ -4588,7 +4625,6 @@ function AuditView({pantry, cooked, outOfStock}){
           </div>
           {missingByBook.map(b => {
             const isOpen = expandedBook === b.title;
-            const editedInThisBook = b.missingRecipes.filter(r => pageEdits[r.id] != null).length;
             return <div key={b.title} className="border-b border-stone-100 last:border-0">
               <div
                 role="button" tabIndex={0}
@@ -4601,7 +4637,6 @@ function AuditView({pantry, cooked, outOfStock}){
                   {b.missing > 0 && <span className="text-stone-400 text-xs shrink-0">{isOpen ? '▼' : '▶'}</span>}
                   {b.missing === 0 && <span className="text-stone-300 text-xs shrink-0">·</span>}
                   <span className="truncate">{b.title}</span>
-                  {editedInThisBook > 0 && <span className="text-[10px] text-amber-700 bg-amber-100 rounded px-1.5 py-0.5 shrink-0" title={`${editedInThisBook} pending local edit${editedInThisBook === 1 ? "" : "s"} in this book`}>+{editedInThisBook}</span>}
                 </div>
                 <div className={`col-span-2 text-right mono text-xs ${b.missing > 0 ? "text-amber-700 font-semibold" : "text-stone-400"}`}>{b.missing} / {b.total}</div>
                 <div className="col-span-3"><Bar pct={b.completePct}/></div>
@@ -4609,24 +4644,36 @@ function AuditView({pantry, cooked, outOfStock}){
               </div>
               {isOpen && b.missing > 0 && <div className="bg-stone-50 rounded px-3 py-2 my-1 space-y-1">
                 <div className="text-[10px] text-stone-500 uppercase tracking-wider mb-1.5">
-                  {b.missingRecipes.length} recipe{b.missingRecipes.length === 1 ? "" : "s"} need{b.missingRecipes.length === 1 ? "s" : ""} a page number — enter a number and tab/click away to save locally
+                  {b.missingRecipes.length} recipe{b.missingRecipes.length === 1 ? "" : "s"} need{b.missingRecipes.length === 1 ? "s" : ""} a page number — enter a number and tab/click away to save
                 </div>
                 {b.missingRecipes.map(r => {
-                  const editVal = pageEdits[r.id];
+                  const syncErr = rowSyncErrors[r.id];
                   return <div key={r.id} className="grid grid-cols-12 gap-2 items-center text-sm py-0.5">
                     <div className="col-span-9 truncate" title={r.name}>{r.name}</div>
                     <div className="col-span-3 flex items-center justify-end gap-1.5">
+                      {syncErr && <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500" title={syncErr}></span>}
                       <input
                         type="number"
                         min="1"
                         placeholder="page"
-                        defaultValue={editVal ?? ""}
-                        onBlur={(e)=>setPageEdit(r.id, e.target.value)}
+                        defaultValue=""
+                        onBlur={(e)=>{
+                          const val = e.target.value;
+                          if (!val) return; // empty blur — don't fire a no-op save
+                          // Clear any prior error optimistically, save, restore on failure
+                          setRowSyncErrors(prev => { const n = {...prev}; delete n[r.id]; return n; });
+                          updateRecipePage(r.id, val, {
+                            onError: (err) => setRowSyncErrors(prev => ({ ...prev, [r.id]: "Couldn't save — try again" })),
+                          });
+                          // Clear the input so a re-render of this row (which will
+                          // disappear from the missing list once the optimistic
+                          // mutation lands) doesn't carry the stale value.
+                          e.target.value = "";
+                        }}
                         onKeyDown={(e)=>{ if(e.key==='Enter'){ e.target.blur(); } }}
                         className="w-16 px-2 py-0.5 text-xs border border-stone-300 rounded mono text-right focus:outline-none focus:border-amber-500"
-                        title="Enter the page number, then Tab or click away to save (locally on this device)"
+                        title="Enter the page number, then Tab or Enter to save to Supabase"
                       />
-                      {editVal != null && <span className="text-[10px] text-amber-700" title="Pending — unsaved to Supabase">●</span>}
                     </div>
                   </div>;
                 })}
@@ -4634,46 +4681,6 @@ function AuditView({pantry, cooked, outOfStock}){
             </div>;
           })}
         </div>
-        {showExportModal && <div
-          role="dialog" aria-modal="true"
-          onClick={(e)=>{ if (e.target === e.currentTarget) setShowExportModal(false); }}
-          className="fixed inset-0 bg-stone-900/40 flex items-center justify-center p-4 z-50"
-        >
-          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[80vh] overflow-hidden flex flex-col">
-            <div className="px-4 py-3 border-b border-stone-200 flex items-center justify-between">
-              <h3 className="font-semibold text-sm">Export {pendingEditCount} page-number update{pendingEditCount === 1 ? "" : "s"}</h3>
-              <button onClick={()=>setShowExportModal(false)} className="text-stone-400 hover:text-stone-700 text-xl leading-none">×</button>
-            </div>
-            <div className="px-4 py-3 text-xs text-stone-600 border-b border-stone-100 leading-relaxed">
-              The dashboard can't write to the <code className="mono">recipes</code> table directly (anon key is read-only by RLS). Copy this SQL and run it in the Supabase SQL Editor — or paste it to a Claude session and ask it to apply. Once it's run successfully, click <strong>"Mark as applied"</strong> below to clear local state. The KPI counts will update on the next page load.
-            </div>
-            <textarea
-              readOnly
-              value={exportSQL}
-              className="flex-1 mono text-xs p-3 bg-stone-50 border-0 resize-none focus:outline-none min-h-[200px]"
-              onFocus={(e)=>e.target.select()}
-            />
-            <div className="px-4 py-3 border-t border-stone-200 flex flex-wrap items-center justify-end gap-2">
-              <button
-                onClick={()=>{
-                  if (navigator.clipboard) {
-                    navigator.clipboard.writeText(exportSQL).catch(()=>{});
-                  }
-                }}
-                className="px-3 py-1.5 rounded border border-stone-300 hover:bg-stone-50 text-xs"
-              >Copy SQL</button>
-              <button
-                onClick={()=>{
-                  if (confirm(`Mark all ${pendingEditCount} pending edits as applied and clear local state? Do this only after running the SQL successfully.`)) {
-                    clearAllEdits();
-                    setShowExportModal(false);
-                  }
-                }}
-                className="px-3 py-1.5 rounded bg-emerald-700 hover:bg-emerald-800 text-white text-xs"
-              >Mark as applied</button>
-            </div>
-          </div>
-        </div>}
       </>}
     </Section>
 
@@ -5366,6 +5373,11 @@ function App(){
   // recipesLoaded triggers a re-render once the module-level RECIPES
   // array has been populated (it's read directly by many components).
   const [recipesLoaded, setRecipesLoaded] = useState(false);
+  // Bumped on every successful recipe mutation so views that close over the
+  // module-level RECIPES binding can declare a useMemo dep on this value
+  // and re-run when a row changes. RECIPES itself is still the canonical
+  // store (mutable, module-level) — this is just a re-render trigger.
+  const [recipesVersion, setRecipesVersion] = useState(0);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
 
@@ -5730,6 +5742,49 @@ function App(){
       });
   }, [inFreezer, findRowByItem, setItemSyncError]);
 
+  // Update a recipe's source_page in Supabase, with an optimistic mutation
+  // of the module-level RECIPES array and a recipesVersion bump for re-render.
+  // `page` of null / "" / 0 stores null (clearing the value); otherwise a
+  // positive integer. Returns a promise so callers can await for UI states.
+  // Errors don't roll back the mutation — they just surface via console +
+  // the optional onError callback (so a row-level edit affordance can show
+  // a red dot the same way pantry rows do on sync failures).
+  const updateRecipePage = useCallback(async (recipeId, page, opts) => {
+    const onError = (opts && opts.onError) || null;
+    const recipe = RECIPES.find(r => r.id === recipeId);
+    if (!recipe) {
+      console.warn(`updateRecipePage: no recipe with id ${recipeId}`);
+      return;
+    }
+    // Coerce input. Treat null/empty/0/negative as "clear the page".
+    let nextPage = null;
+    if (page !== null && page !== undefined && page !== "") {
+      const n = parseInt(page, 10);
+      if (!isNaN(n) && n > 0) nextPage = n;
+    }
+    const prevPage = recipe.source && recipe.source.page;
+    if (prevPage === nextPage) return; // no-op
+    // Optimistic local update: rebuild RECIPES with a new array (so React's
+    // referential check fires on consumers that pass it through props/deps),
+    // mutating only the target row's source.page.
+    setRecipes(RECIPES.map(r => r.id === recipeId
+      ? { ...r, source: { ...(r.source || {}), page: nextPage } }
+      : r));
+    setRecipesVersion(v => v + 1);
+    // Fire PATCH in background.
+    try {
+      await patchRecipeRow(recipeId, { source_page: nextPage });
+    } catch (err) {
+      console.error(`Failed to sync source_page for recipe ${recipeId}:`, err);
+      // Roll back the local change.
+      setRecipes(RECIPES.map(r => r.id === recipeId
+        ? { ...r, source: { ...(r.source || {}), page: prevPage } }
+        : r));
+      setRecipesVersion(v => v + 1);
+      if (onError) onError(err);
+    }
+  }, []);
+
   // Debounced qty PATCH. Multiple rapid +/- taps coalesce into one network
   // call carrying the final value. Per-item timers so different items don't
   // share a debounce window.
@@ -5933,11 +5988,11 @@ function App(){
     {currentTabMeta && currentTabMeta[2] && <div className="tab-subtitle">{currentTabMeta[2]}</div>}
 
     {tab==="planner" && <PlannerView pantry={pantry} outOfStock={outOfStock} cooked={cooked}/>}
-    {tab==="recipes" && <RecipesView pantry={pantry} outOfStock={outOfStock} cooked={cooked} addCooked={addCooked} eaterFilter={eaterFilter} setEaterFilter={setEaterFilter} cookedSyncErrors={cookedSyncErrors}/>}
+    {tab==="recipes" && <RecipesView pantry={pantry} outOfStock={outOfStock} cooked={cooked} addCooked={addCooked} eaterFilter={eaterFilter} setEaterFilter={setEaterFilter} cookedSyncErrors={cookedSyncErrors} updateRecipePage={updateRecipePage} recipesVersion={recipesVersion}/>}
     {tab==="pantry" && <PantryView pantry={pantry} outOfStock={outOfStock} toggleOutOfStock={toggleOutOfStock} inFreezer={inFreezer} toggleInFreezer={toggleInFreezer} qtyAdjustments={qtyAdjustments} adjustQty={adjustQty} syncErrors={syncErrors}/>}
     {tab==="tesco" && <OrdersView pantry={pantry}/>}
     {tab==="gaps" && <GapsView pantry={pantry} outOfStock={outOfStock}/>}
-    {tab==="audit" && <AuditView pantry={pantry} cooked={cooked} outOfStock={outOfStock}/>}
+    {tab==="audit" && <AuditView pantry={pantry} cooked={cooked} outOfStock={outOfStock} updateRecipePage={updateRecipePage} recipesVersion={recipesVersion}/>}
 
     <footer className="text-xs text-stone-400 mt-8 text-center space-y-1">
       <div>Synced to Supabase{STORAGE_OK ? " ✓" : " ✗"} across devices</div>
