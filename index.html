@@ -108,6 +108,13 @@ const { useState, useMemo, useEffect, useCallback, useRef, createContext, useCon
 const SITE_VERSION = "2026-05-14.16";
 const SITE_CHANGELOG = [
   // newest first
+  { version: "2026-05-15.1", date: "2026-05-15", changes: [
+    "**Orders tab: Spend-over-time chart now has a Per order / Timeline toggle.** The original bar chart squashed all 13 orders into evenly-spaced bars, which hid the actual rhythm of shopping — a 2-day gap and a 2-month gap looked identical. Added a small toggle above the chart: 'Per order' keeps the existing view; 'Timeline' positions each bar on a true date axis with month tick labels along the bottom edge. Gaps longer than 45 days between consecutive deliveries are shaded amber with a 'Nd gap' label, so the long lapses (e.g. Jul → Oct 2025, ~62 days; Jan → Apr 2026, ~73 days) are immediately visible. Toggle defaults to 'Per order' to preserve the previous look.",
+    "**Order history and Repeat-purchase patterns sections now collapsible, default closed.** Both sections are heavy — order history renders 13 expandable receipt cards (each with a 27-row item table when opened), and repeat-purchase shows a 30-card grid. They dominated the Orders tab on first paint and pushed the more useful summary sections (Spend by aisle, Khalil allergen exposure) below the fold. Now both render collapsed by default — click the header to expand. Section component already supported this pattern (added in earlier commit for the Recipe Library tabs); this is just opting the two heavy Orders sections in.",
+    "**Receipt parser added to the Orders tab — .eml and .pdf supported.** New 'Add receipt' section (collapsed by default) at the top of the Orders tab accepts a drag-and-drop or file-picker upload of a Tesco receipt email (.eml) or invoice PDF. PDFs trigger a lazy load of pdf.js from unpkg (~1MB, loaded once per session and cached). The parser mirrors the output shape of the Python grocery-receipt-archive skill so the resulting JSON is drop-in compatible. Extracts order number, delivery date, total, line items with quantities/prices/sections, unavailable items, and Khalil-allergen flags. Renders a preview card with KPIs, an allergen flag panel, and an expandable items table.",
+    "**Parser is preview-only by design.** The browser only has the Supabase anon key, which can't write to receipts. More importantly, keeping a single canonical write path (the Python skill) prevents schema drift between in-app parses and skill parses, and means new parse_warning categories or schema migrations only land in one place. The 'Copy JSON' button produces an order object the user can paste into a Claude session — the skill will dedupe by order_number, re-sort, and persist. Banner copy on the Orders tab updated to reflect this workflow.",
+    "**Tesco-only for now; other retailers detected and rejected gracefully.** The detector recognises Tesco, Ocado, Sainsbury's, and Waitrose receipts from sender/text content. Non-Tesco emails return a friendly error pointing the user to use the skill in a Claude session (where the Python parser dispatcher handles per-retailer routing). The parser also self-flags low-confidence parses: missing delivery date, line items not summing to within 15% of the total (likely truncated forwarded email), or zero items extracted — these surface as an amber warning band above the preview.",
+  ]},
   { version: "2026-05-14.16", date: "2026-05-14", changes: [
     "**Sort toggle: binary asc↔desc, no third-state reset.** All three sortable tables (Pantry, Gaps regulars, Leverage) now use a simple two-state toggle. Previously: first click set the column's default direction, second click reversed, third click reset everything back to the table's default column. The reset was confusing — users didn't expect a third click to take them somewhere different from clicks 1 or 2, and there was no visual signal that 'reset' was a state the toggle could land in. Standard table convention is binary asc↔desc, and that's what this is now. Click 1 sorts; click 2 reverses; click 3 reverses again. The table's default sort is still recoverable by clicking a different column and clicking back.",
     "**First-click direction is now per-column, picked to land on the 'interesting end'.** Rather than the previous string=asc / numeric=desc heuristic, each column declares its own opening direction in a `DEFAULT_DIR` map. The heuristic was wrong on several columns — Expires wants soonest-first (asc on date), Last seen wants stalest-first (asc on timestamp, since older dates are smaller numbers), Conf wants lowest-first (asc, what's at risk). Specific defaults: Pantry — `item/category/qty/conf/expires/khalil` all asc (lowest/soonest/most-flagged first). Gaps regulars — `count` desc, `item` asc, `lastSeen` asc (oldest timestamps = stalest items, surfaced first), `status` asc (gap=0 first — already correct from 14.15). Leverage — `ingredient` asc, `recipes/boost/to70` all desc (highest-impact first).",
@@ -476,34 +483,117 @@ async function fetchTescoSkus() {
   return sbFetch("tesco_skus?select=basket_key,tesco_name,tesco_sku,tesco_url,khalil_critical,household_rule_excluded,verified_safe&is_preferred=eq.true&limit=2000");
 }
 
-// Build a Map<lowercase-basket-key, sku-row> for O(1) lookup from a free-form
-// item name. Names are lowercased and trimmed; callers should do the same
-// before lookup. See lookupSku() below for the resolution helper.
+// Build a SKU index for tiered name resolution. Three lookups are needed
+// because the basket-suggester pulls names from sources that have three
+// different shapes:
+//
+//   1. Pantry source (`p.item`)         → normalised: "salmon fillets"
+//   2. Gap source (`g.example`)         → raw Tesco: "Tesco Boneless Salmon Fillets 4 Pack 520g"
+//   3. Leverage source (recipe.ingredient) → recipe form: "salmon fillet" / "lemon"
+//
+// `basket_key` in tesco_skus was seeded as hand-curated normalised names
+// (case 1), so exact-match only hits the pantry path. The gap path needs
+// matching on `tesco_name` (which IS the seeded Tesco product name) or a
+// substring search to handle pack-size variants ("4 Pack 520g" vs "260G").
+//
+// Structure:
+//   - byKey:       Map<lc basket_key, row>      — direct hit for normalised names
+//   - byTescoName: Map<lc tesco_name, row>      — direct hit for raw Tesco names
+//   - all:         array of {nKey, nName, row}  — for substring fallback
 function buildSkuIndex(rows) {
-  const idx = new Map();
+  const byKey = new Map();
+  const byTescoName = new Map();
+  const all = [];
   for (const r of (rows || [])) {
     if (!r.basket_key) continue;
-    idx.set(String(r.basket_key).trim().toLowerCase(), r);
+    const nKey = String(r.basket_key).trim().toLowerCase();
+    const nName = r.tesco_name ? String(r.tesco_name).trim().toLowerCase() : "";
+    byKey.set(nKey, r);
+    if (nName) byTescoName.set(nName, r);
+    all.push({ nKey, nName, row: r });
   }
-  return idx;
+  return { byKey, byTescoName, all };
 }
 
-// Look up a SKU row by free-form item name. Lowercase + trim before matching;
-// returns null if no entry found. Currently exact-match only — fuzzy lookup
-// can be added in a later step if the basket-suggester names diverge from
-// basket_key normalisation. For now, basket_key in the table was seeded from
-// the same name-normalisation used by the basket-suggester, so direct match
-// is the expected hit rate.
+// Tiered SKU lookup. Walks three tiers and stops at the first hit:
+//
+//   1. Direct match on basket_key — fastest, catches normalised pantry names
+//   2. Direct match on tesco_name — catches raw Tesco receipt names that
+//      exactly match the seeded product name
+//   3. Substring match — catches pack-size variants and partial matches in
+//      either direction (e.g. "Tesco 2 Boneless Salmon Fillets 260G" against
+//      seeded basket_key "salmon fillets"). For substring, we prefer the
+//      basket_key match over the tesco_name match because basket_key is
+//      shorter and more canonical — less risk of accidental cross-match.
+//
+// Returns the SKU row or null. The skuIndex parameter accepts either the new
+// structured form ({byKey, byTescoName, all}) or — for backwards compat —
+// a plain Map (which gets treated as byKey-only). Old callers that built
+// their own Map (none currently, but the receipts pattern allowed it) keep
+// working.
 function lookupSku(name, skuIndex) {
   if (!name || !skuIndex) return null;
-  return skuIndex.get(String(name).trim().toLowerCase()) || null;
+  const n = String(name).trim().toLowerCase();
+  if (!n) return null;
+
+  // Backwards-compat: a plain Map (the pre-tier-fix shape) only has byKey.
+  if (skuIndex instanceof Map) {
+    return skuIndex.get(n) || null;
+  }
+
+  // Tier 1: exact match on basket_key
+  const byKey = skuIndex.byKey && skuIndex.byKey.get(n);
+  if (byKey) return byKey;
+
+  // Tier 2: exact match on tesco_name
+  const byName = skuIndex.byTescoName && skuIndex.byTescoName.get(n);
+  if (byName) return byName;
+
+  // Tier 3: substring match. Score by overlap length so we pick the most
+  // specific match when multiple candidates contain the query string.
+  // basket_key matches win ties because they're shorter / more canonical.
+  let best = null;
+  for (const entry of (skuIndex.all || [])) {
+    let overlap = 0;
+    let kind = null;
+    if (entry.nKey && (n.includes(entry.nKey) || entry.nKey.includes(n))) {
+      overlap = Math.min(n.length, entry.nKey.length);
+      kind = "key";
+    }
+    if (entry.nName && (n.includes(entry.nName) || entry.nName.includes(n))) {
+      const o2 = Math.min(n.length, entry.nName.length);
+      // Prefer basket_key match in ties (kind === "key" wins on equal overlap)
+      if (o2 > overlap || (o2 === overlap && kind !== "key")) {
+        overlap = o2;
+        kind = "name";
+      }
+    }
+    if (kind && (!best || overlap > best.overlap)) {
+      best = { row: entry.row, overlap, kind };
+    }
+  }
+  return best ? best.row : null;
+}
+
+// Build a Tesco search URL for items without a seeded SKU. Used as the
+// fallback so every basket item is at least clickable, even if the
+// destination is a search results page rather than a product page.
+// Leverage ingredients (recipe items like "green chilli", "rapeseed oil")
+// won't be in tesco_skus until a future seeding pass — meanwhile this gives
+// the user a one-click path to find and add them manually, and gives the
+// Claude-in-Chrome export flow a fallback URL it can search-and-confirm
+// against (rather than silently dropping the item).
+function tescoSearchUrl(name) {
+  if (!name) return null;
+  return `https://www.tesco.com/groceries/en-GB/search?query=${encodeURIComponent(String(name).trim())}`;
 }
 
 // Context for SKU index. Consumed by PlannerView's basket useMemo to attach
-// tesco_sku / tesco_url / flags to each basket item. Default empty Map so
-// consumers don't crash before the boot fetch lands; while empty, items
-// will have skuRow=null (needs_sku_lookup: true) — non-blocking by design.
-const TescoSkusContext = createContext(new Map());
+// tesco_sku / tesco_url / flags to each basket item. Default empty index
+// shape (not a Map) so consumers don't crash before the boot fetch lands;
+// while empty, items will have skuRow=null (needs_sku_lookup: true) —
+// non-blocking by design.
+const TescoSkusContext = createContext({ byKey: new Map(), byTescoName: new Map(), all: [] });
 
 // Group the flat household_allergens rows into the nested config shape
 // consumers (flagsForRecipe, khalilAllergenFlag) need. Splits Khalil's
@@ -1436,6 +1526,16 @@ function PlannerView({pantry, outOfStock, cooked}){
   const gapAnalysis = useMemo(()=> computeRegularsAndGaps(pantry, receipts, allergens, 3, skuIndex), [pantry, receipts, allergens, skuIndex]);
   const nextDelivery = useMemo(()=> suggestNextDelivery(receipts), [receipts]);
 
+  // Track which basket items have already been opened in a Tesco tab (by SKU).
+  // Per-session only — resets on page reload so a fresh shop starts clean. We
+  // key on SKU rather than name so duplicates and substitutions stay distinct.
+  // The "Open next" button advances through openable items in basket order,
+  // skipping anything without a SKU (needs_sku_lookup) or anything already
+  // opened. One click = one tab, deliberately — pop-up blockers will eat a
+  // burst of window.open() calls from a single click, and one-at-a-time
+  // keeps the review-as-you-go flow that surfaces wrong product pages early.
+  const [openedSkus, setOpenedSkus] = useState(new Set());
+
   const basket = useMemo(()=>{
     const items = [];
     const seen = new Set(); // dedupe by lowercase canonical name
@@ -1471,9 +1571,13 @@ function PlannerView({pantry, outOfStock, cooked}){
         // Step 2 fields — present on every item; downstream UI/export logic
         // reads these. tesco_sku and tesco_url are null when no SKU row
         // matched; needs_sku_lookup makes that condition explicit for filters.
+        // tesco_search_url is always populated (it's just an encoded query) —
+        // used as the click target when tesco_url is null, so every basket
+        // item is clickable rather than just the seeded ones.
         tesco_sku: skuRow ? skuRow.tesco_sku : null,
         tesco_url: skuRow ? skuRow.tesco_url : null,
         tesco_name: skuRow ? skuRow.tesco_name : null,
+        tesco_search_url: tescoSearchUrl(name),
         khalil_critical: skuRow ? !!skuRow.khalil_critical : false,
         needs_sku_lookup: !skuRow,
       };
@@ -1540,6 +1644,114 @@ function PlannerView({pantry, outOfStock, cooked}){
     return { items, total, priced: priced.length, unpriced, counts, daysToDelivery };
   }, [gapAnalysis, leverage, pantry, outOfStock, priceIndex, nextDelivery, skuIndex]);
 
+  // ===== Basket actions: Open in Tesco + Export JSON =====
+  //
+  // Items split into three buckets for the action UI:
+  //   - openable: have a tesco_url, not yet opened this session
+  //   - opened: already clicked through (kept distinct so the count shows progress)
+  //   - blocked: no SKU resolved (needs_sku_lookup=true) — surfaced separately
+  //     so they're visible rather than silently dropped
+  const openableItems = useMemo(() => {
+    return basket.items.filter(b => b.tesco_url && !openedSkus.has(b.tesco_sku));
+  }, [basket.items, openedSkus]);
+
+  const blockedItems = useMemo(() => {
+    return basket.items.filter(b => b.needs_sku_lookup);
+  }, [basket.items]);
+
+  const openNext = () => {
+    const next = openableItems[0];
+    if (!next) return;
+    // window.open returns null if the popup was blocked; we still mark it as
+    // opened so the user can advance past it rather than getting stuck. A
+    // blocked popup is a user-side setting, not something we can fix from JS.
+    window.open(next.tesco_url, "_blank", "noopener,noreferrer");
+    setOpenedSkus(prev => {
+      const next2 = new Set(prev);
+      next2.add(next.tesco_sku);
+      return next2;
+    });
+  };
+
+  const resetOpened = () => setOpenedSkus(new Set());
+
+  // Build the JSON payload for the Claude-in-Chrome handoff. Self-contained:
+  // every field the agent needs to add the basket without asking. Includes
+  // a _meta block with delivery date and household never-substitute rules
+  // (currently regex-based from RAW; SKU-level exclusions are already
+  // filtered out of basket.items by neverRestockReason so they won't show).
+  //
+  // Extracted as a shared builder so both download (file) and copy
+  // (clipboard) paths produce identical payloads — important because we
+  // don't yet know which Claude-in-Chrome prefers, and divergent payloads
+  // would make Step 4 dry runs harder to debug.
+  const buildBasketPayload = () => ({
+    _meta: {
+      generated_at: new Date().toISOString(),
+      suggested_delivery_date: nextDelivery.date || null,
+      item_count: basket.items.length,
+      openable_count: basket.items.filter(b => b.tesco_url).length,
+      needs_sku_lookup_count: blockedItems.length,
+      estimated_total_gbp: basket.total,
+      url_handling: {
+        note: "Each item has either tesco_url (direct product page, preferred) or only tesco_search_url (Tesco search results, fallback). If tesco_url is present, go straight to it and Add to Basket. If only tesco_search_url, perform the search and confirm with the user before adding — the search may return multiple plausible products.",
+      },
+      household_rules: {
+        never_substitute_to: (HOUSEHOLD_RULES.never_restock || []).map(r => r.pattern),
+        note: "Khalil-critical items must not be substituted. Decline all Tesco substitution offers.",
+      },
+    },
+    items: basket.items.map(b => ({
+      name: b.name,
+      qty: b.qty,
+      pack_size: b.packSize,
+      kind: b.kind,
+      why: b.why,
+      tesco_sku: b.tesco_sku,
+      tesco_url: b.tesco_url,
+      tesco_name: b.tesco_name,
+      tesco_search_url: b.tesco_search_url,
+      khalil_critical: b.khalil_critical,
+      needs_sku_lookup: b.needs_sku_lookup,
+      estimated_total_gbp: b.totalPrice,
+    })),
+  });
+
+  const downloadBasketJson = () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const blob = new Blob([JSON.stringify(buildBasketPayload(), null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `basket-${today}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  // Copy state: "idle" | "copied" | "error". The button shows confirmation
+  // for 2 seconds after a successful copy, then resets. Two failure modes:
+  //   1. navigator.clipboard unavailable (insecure context / very old browser)
+  //   2. permission denied (rare in same-origin; user can deny via prompt)
+  // Both fall back to "error" state so the user knows something went wrong
+  // rather than silently losing the data.
+  const [copyState, setCopyState] = useState("idle");
+
+  const copyBasketJson = async () => {
+    const json = JSON.stringify(buildBasketPayload(), null, 2);
+    try {
+      if (!navigator.clipboard) throw new Error("Clipboard API not available");
+      await navigator.clipboard.writeText(json);
+      setCopyState("copied");
+      setTimeout(() => setCopyState("idle"), 2000);
+    } catch (err) {
+      console.warn("Clipboard copy failed:", err);
+      setCopyState("error");
+      setTimeout(() => setCopyState("idle"), 3000);
+    }
+  };
+
   return <div className="space-y-6">
     {expiring.length>0 && <Section title="Use these first — expiring ≤5 days" tone="warn" collapsible defaultOpen={false}
       tip="Pantry items estimated to expire within 5 days, sorted by urgency. The recipes below are ones that use at least one of these items.">
@@ -1578,9 +1790,57 @@ function PlannerView({pantry, outOfStock, cooked}){
             const chipLabel = b.kind === "expiring" ? "expiring" : b.kind === "gap" ? "gap" : "leverage";
             const qtyLabel = b.qty > 1 ? `${b.qty}×` : "1×";
             const sizeLabel = b.packSize || "pack";
+            // Per-row click handler: keep openedSkus in sync with "Open next"
+            // so the two flows don't get out of step. Browser handles the
+            // navigation via the anchor's href + target=_blank; we only
+            // update React state. No preventDefault — letting the link
+            // behave normally means cmd/ctrl-click opens in background tab
+            // as users expect.
+            const markOpened = () => {
+              if (!b.tesco_sku) return;
+              setOpenedSkus(prev => {
+                if (prev.has(b.tesco_sku)) return prev;
+                const next = new Set(prev);
+                next.add(b.tesco_sku);
+                return next;
+              });
+            };
+            const isOpened = b.tesco_sku && openedSkus.has(b.tesco_sku);
             return <tr key={i} className="border-t border-stone-100 align-top">
               <td className="py-2 pr-2">
-                <div className="font-medium leading-tight">{b.name}</div>
+                <div className="font-medium leading-tight">
+                  {b.tesco_url ? (
+                    <a
+                      href={b.tesco_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={markOpened}
+                      className={`hover:underline ${isOpened ? "text-stone-500" : ""}`}
+                      title={`Open on Tesco: ${b.tesco_name || b.name}`}
+                    >
+                      {b.name}
+                      {isOpened && <span className="ml-1 text-xs text-stone-400">✓</span>}
+                    </a>
+                  ) : b.tesco_search_url ? (
+                    // No seeded SKU — fall back to a Tesco search link.
+                    // Visually distinct (dotted underline + 🔎) so the user
+                    // knows it lands on search results, not a product page.
+                    // Still counts toward openedSkus by name (since there's
+                    // no SKU) so the "Open next" flow advances past it.
+                    <a
+                      href={b.tesco_search_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-stone-700 hover:underline decoration-dotted underline-offset-2"
+                      style={{ textDecoration: "underline dotted", textUnderlineOffset: "2px" }}
+                      title={`Tesco search for "${b.name}" — pick the right product manually (no SKU mapped yet)`}
+                    >
+                      <span className="text-xs mr-0.5">🔎</span>{b.name}
+                    </a>
+                  ) : (
+                    <span>{b.name}</span>
+                  )}
+                </div>
                 <Chip tone={chipTone}>{chipLabel}</Chip>
               </td>
               <td className="py-2 pr-2">
@@ -1608,8 +1868,71 @@ function PlannerView({pantry, outOfStock, cooked}){
           </tfoot>}
         </table>
       </div>
+
+      {/* Basket actions: open in Tesco one-at-a-time + JSON export.
+          One-per-click is deliberate — browsers block popup bursts from a
+          single user gesture, and one-at-a-time keeps you reviewing each
+          product page as it opens. */}
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        {(() => {
+          // Total items with a Tesco URL — the denominator for the "X of N"
+          // progress display. Blocked items (needs_sku_lookup) are excluded
+          // from both numerator and denominator so the count stays honest.
+          const openableTotal = basket.items.filter(b => b.tesco_url).length;
+          const openedCount = openableTotal - openableItems.length;
+          if (openableItems.length > 0) {
+            return (
+              <button
+                onClick={openNext}
+                className="pill"
+                data-active="true"
+                title={`Opens "${openableItems[0].name}" in a new Tesco tab. One click = one tab.`}
+              >
+                🛒 Open next in Tesco: {openableItems[0].name}
+                <span className="text-stone-500 ml-1">· {openedCount + 1} of {openableTotal}</span>
+              </button>
+            );
+          }
+          if (openableTotal > 0) {
+            return (
+              <span className="text-sm text-stone-600">
+                ✓ All {openableTotal} openable items opened
+                <button onClick={resetOpened} className="pill ml-2" title="Clear the opened-items tracker so you can re-open from the top">Reset</button>
+              </span>
+            );
+          }
+          return null;
+        })()}
+
+        <button
+          onClick={downloadBasketJson}
+          className="pill"
+          title="Download the basket as JSON (for handing off to Claude in Chrome). Includes SKUs, URLs, Khalil-critical flags, and household never-substitute rules."
+        >
+          ⬇ Export JSON
+        </button>
+
+        <button
+          onClick={copyBasketJson}
+          className="pill"
+          data-active={copyState === "copied" ? "true" : undefined}
+          title="Copy the basket JSON to clipboard — paste straight into Claude in Chrome. Same payload as Export JSON."
+        >
+          {copyState === "copied" ? "✓ Copied" : copyState === "error" ? "✗ Copy failed" : "📋 Copy JSON"}
+        </button>
+
+        {blockedItems.length > 0 && (
+          <span
+            className="text-xs text-stone-600 bg-stone-100 border border-stone-200 rounded-full px-2 py-1"
+            title="These items don't have a seeded Tesco SKU yet — clicking the item name opens a Tesco search instead of a direct product page. Future seeding pass will replace search links with direct ones."
+          >
+            🔎 {blockedItems.length} via search
+          </span>
+        )}
+      </div>
+
       <div className="text-xs text-stone-500 mt-3 leading-relaxed">
-        Quantities and pack sizes are based on what you typically order for this product. Prices are medians from your past Tesco orders and may not reflect current Tesco pricing. Fuzzy matches are marked with <span className="mono">~</span> and shown in lighter text. Unpriced items (<span className="mono">—</span>) had no match in order history. Suggested delivery is calculated from your past order cadence.
+        Quantities and pack sizes are based on what you typically order for this product. Prices are medians from your past Tesco orders and may not reflect current Tesco pricing. Fuzzy matches are marked with <span className="mono">~</span> and shown in lighter text. Unpriced items (<span className="mono">—</span>) had no match in order history. Item names with a dotted underline (<span className="mono">🔎</span>) link to a Tesco search rather than a direct product page — these don't have a seeded SKU yet, so pick the right product manually. Suggested delivery is calculated from your past order cadence.
       </div>
     </Section>}
 
@@ -1775,28 +2098,148 @@ function LeverageTileGrid({items}){
 
 // ===== Orders view: reporting & visualisation over archived Tesco orders =====
 // Lightweight bar chart — pure SVG, no external chart lib
+// Spend chart with two view modes:
+//   "per-order" — one evenly-spaced bar per delivery; good for seeing relative
+//                 order sizes side-by-side without large gaps eating screen width.
+//   "timeline"  — bars positioned on a real date axis; gaps between orders are
+//                 visible as empty stretches. Useful for spotting long lapses
+//                 (e.g. the 2-month break between Jul and Oct 2025).
+// Toggle defaults to "per-order" to preserve the previous look.
 function SpendChart({orders}){
+  const [mode, setMode] = useState("per-order");
   if (!orders.length) return null;
-  const max = Math.max(...orders.map(o=>o.total_paid_gbp||0), 1);
-  const w = 600, h = 160, pad = 30, barGap = 4;
-  const bw = Math.max(8, (w - pad*2 - barGap*(orders.length-1)) / orders.length);
-  return <div className="overflow-x-auto">
-    <svg viewBox={`0 0 ${w} ${h+30}`} className="w-full" style={{minWidth: orders.length*14}}>
-      {orders.map((o,i)=>{
-        const v = o.total_paid_gbp||0;
-        const bh = (v/max) * (h - pad);
-        const x = pad + i*(bw+barGap);
-        const y = h - bh;
-        return <g key={i}>
-          <rect x={x} y={y} width={bw} height={bh} fill="#0f766e" opacity="0.85">
-            <title>{`${formatDate(o.delivery_date)}: £${v.toFixed(2)} · ${o.purchased_count||o.item_count||0} items`}</title>
-          </rect>
-          <text x={x+bw/2} y={y-3} textAnchor="middle" fontSize="9" fill="#44403c">£{Math.round(v)}</text>
-          <text x={x+bw/2} y={h+12} textAnchor="middle" fontSize="8" fill="#a8a29e">{(o.delivery_date||"").slice(5)}</text>
-        </g>;
-      })}
-      <line x1={pad} y1={h} x2={w-pad} y2={h} stroke="#d6d3d1" strokeWidth="1"/>
-    </svg>
+
+  const Toggle = () => (
+    <div className="flex items-center gap-1 text-xs mb-2">
+      <span className="text-stone-500 mr-1">View:</span>
+      {[
+        ["per-order", "Per order", "One bar per delivery, evenly spaced"],
+        ["timeline",  "Timeline",  "Bars on a real date axis — gaps between orders are visible"],
+      ].map(([key, label, tip]) => (
+        <button key={key}
+          onClick={() => setMode(key)}
+          title={tip}
+          className={"px-2 py-0.5 rounded border text-xs " +
+            (mode === key
+              ? "bg-teal-700 text-white border-teal-700"
+              : "bg-white text-stone-700 border-stone-300 hover:bg-stone-50")}>
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+
+  if (mode === "per-order") {
+    const max = Math.max(...orders.map(o=>o.total_paid_gbp||0), 1);
+    const w = 600, h = 160, pad = 30, barGap = 4;
+    const bw = Math.max(8, (w - pad*2 - barGap*(orders.length-1)) / orders.length);
+    return <div>
+      <Toggle/>
+      <div className="overflow-x-auto">
+        <svg viewBox={`0 0 ${w} ${h+30}`} className="w-full" style={{minWidth: orders.length*14}}>
+          {orders.map((o,i)=>{
+            const v = o.total_paid_gbp||0;
+            const bh = (v/max) * (h - pad);
+            const x = pad + i*(bw+barGap);
+            const y = h - bh;
+            return <g key={i}>
+              <rect x={x} y={y} width={bw} height={bh} fill="#0f766e" opacity="0.85">
+                <title>{`${formatDate(o.delivery_date)}: £${v.toFixed(2)} · ${o.purchased_count||o.item_count||0} items`}</title>
+              </rect>
+              <text x={x+bw/2} y={y-3} textAnchor="middle" fontSize="9" fill="#44403c">£{Math.round(v)}</text>
+              <text x={x+bw/2} y={h+12} textAnchor="middle" fontSize="8" fill="#a8a29e">{(o.delivery_date||"").slice(5)}</text>
+            </g>;
+          })}
+          <line x1={pad} y1={h} x2={w-pad} y2={h} stroke="#d6d3d1" strokeWidth="1"/>
+        </svg>
+      </div>
+    </div>;
+  }
+
+  // ---- Timeline mode ----
+  // Position each bar by its delivery_date on a continuous time axis.
+  // Gaps between distant orders show as empty white space; gaps >45d are
+  // shaded amber as a visual cue. Month tick labels along the bottom edge.
+  const dated = orders
+    .map(o => ({...o, _t: Date.parse(o.delivery_date)}))
+    .filter(o => !isNaN(o._t))
+    .sort((a,b) => a._t - b._t);
+  if (!dated.length) {
+    return <div>
+      <Toggle/>
+      <div className="text-xs text-stone-500">No dated orders to plot on a timeline.</div>
+    </div>;
+  }
+  const tlMax  = Math.max(...dated.map(o => o.total_paid_gbp||0), 1);
+  const tMin   = dated[0]._t;
+  const tMax   = dated[dated.length-1]._t;
+  const w = 720, h = 160, pad = 30;
+  const span = Math.max(tMax - tMin, 24*3600*1000); // avoid divide-by-zero
+  const xOf = t => pad + ((t - tMin) / span) * (w - pad*2);
+
+  // Month tick lines between tMin and tMax inclusive.
+  const ticks = [];
+  const d = new Date(tMin);
+  d.setUTCDate(1);
+  d.setUTCHours(0,0,0,0);
+  while (d.getTime() <= tMax) {
+    if (d.getTime() >= tMin) ticks.push(new Date(d));
+    d.setUTCMonth(d.getUTCMonth() + 1);
+  }
+
+  // Gaps >45 days between consecutive orders.
+  const gaps = [];
+  for (let i = 1; i < dated.length; i++) {
+    const gapDays = (dated[i]._t - dated[i-1]._t) / 86400000;
+    if (gapDays > 45) {
+      gaps.push({ x1: xOf(dated[i-1]._t), x2: xOf(dated[i]._t), days: Math.round(gapDays) });
+    }
+  }
+
+  const barW = 9;
+  return <div>
+    <Toggle/>
+    <div className="overflow-x-auto">
+      <svg viewBox={`0 0 ${w} ${h+40}`} className="w-full" style={{minWidth: 500}}>
+        {/* Gap shading */}
+        {gaps.map((g, i) => (
+          <g key={`gap${i}`}>
+            <rect x={g.x1+barW/2} y={pad/2} width={Math.max(0, g.x2-g.x1-barW)} height={h-pad/2}
+                  fill="#fef3c7" opacity="0.55"/>
+            <text x={(g.x1+g.x2)/2} y={pad/2+10} textAnchor="middle" fontSize="8" fill="#92400e">
+              {g.days}d gap
+            </text>
+          </g>
+        ))}
+        {/* Month ticks */}
+        {ticks.map((t, i) => {
+          const x = xOf(t.getTime());
+          const label = t.toLocaleDateString("en-GB", { month: "short", year: "2-digit" });
+          return <g key={`tick${i}`}>
+            <line x1={x} y1={h} x2={x} y2={h+3} stroke="#d6d3d1" strokeWidth="1"/>
+            <text x={x} y={h+13} textAnchor="middle" fontSize="8" fill="#a8a29e">{label}</text>
+          </g>;
+        })}
+        {/* Baseline */}
+        <line x1={pad} y1={h} x2={w-pad} y2={h} stroke="#d6d3d1" strokeWidth="1"/>
+        {/* Bars */}
+        {dated.map((o, i) => {
+          const v = o.total_paid_gbp || 0;
+          const bh = (v/tlMax) * (h - pad);
+          const x = xOf(o._t) - barW/2;
+          const y = h - bh;
+          return <g key={i}>
+            <rect x={x} y={y} width={barW} height={bh} fill="#0f766e" opacity="0.85">
+              <title>{`${formatDate(o.delivery_date)}: £${v.toFixed(2)} · ${o.purchased_count||o.item_count||0} items`}</title>
+            </rect>
+            <text x={x+barW/2} y={y-3} textAnchor="middle" fontSize="8" fill="#44403c">£{Math.round(v)}</text>
+          </g>;
+        })}
+      </svg>
+    </div>
+    <div className="text-[10px] text-stone-500 mt-1">
+      Bars sit on a true date axis. Amber bands mark gaps longer than 45 days between deliveries.
+    </div>
   </div>;
 }
 
@@ -1823,6 +2266,503 @@ function ordersKhalilFlag(name){
   if (/\b(lentil|chickpea|black bean|kidney bean|cannellini|edamame|broad bean|baked bean|borlotti|haricot|butter bean)\b/.test(n)) return "legume";
   if (/\bavocado\b/.test(n)) return "avocado";
   return null;
+}
+
+// ============================================================
+// In-browser receipt parser (Tesco-focused, .eml + .pdf)
+// ============================================================
+// This is a *preview* parser. It does NOT write back to the canonical
+// orders.json archive (that's still done via the Python `grocery-receipt-archive`
+// skill in a Claude session, which handles dedup, schema versioning,
+// parse warnings, and Supabase persistence). What this does:
+//   1. Lets the user drop an .eml or .pdf in the Orders tab
+//   2. Extracts text from it
+//   3. Routes Tesco emails through a JS Tesco parser that mirrors the
+//      Python parser's output shape
+//   4. Renders the parsed order inline with item counts, Khalil-allergen
+//      flags, totals, and a "Copy JSON" button so the user can paste it
+//      into a Claude session to commit it permanently.
+//
+// Why preview-only:
+//   - Browser only has anon Supabase key; receipts write needs service role
+//   - Keeping a single canonical write path (Python skill) avoids divergent
+//     schemas between in-app parses and skill parses
+//   - Schema evolutions (e.g. new parse_warning categories) should land in
+//     one place
+// ------------------------------------------------------------
+
+// --- PDF.js loader (lazy, on first .pdf dropped) ---
+let __pdfjsPromise = null;
+function loadPdfJs(){
+  if (__pdfjsPromise) return __pdfjsPromise;
+  __pdfjsPromise = new Promise((resolve, reject) => {
+    if (window.pdfjsLib) { resolve(window.pdfjsLib); return; }
+    const s = document.createElement("script");
+    s.src = "https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.min.js";
+    s.onload = () => {
+      try {
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+          "https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
+        resolve(window.pdfjsLib);
+      } catch (e) { reject(e); }
+    };
+    s.onerror = () => reject(new Error("Failed to load pdf.js"));
+    document.head.appendChild(s);
+  });
+  return __pdfjsPromise;
+}
+
+async function extractPdfText(file){
+  const pdfjsLib = await loadPdfJs();
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  const out = [];
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const tc = await page.getTextContent();
+    // Reassemble lines by Y-coordinate to preserve receipt layout
+    const items = tc.items.slice().sort((a,b) => (b.transform[5] - a.transform[5]) || (a.transform[4] - b.transform[4]));
+    let lastY = null;
+    let line = [];
+    for (const it of items) {
+      const y = Math.round(it.transform[5]);
+      if (lastY !== null && Math.abs(y - lastY) > 2) {
+        out.push(line.join(" "));
+        line = [];
+      }
+      line.push(it.str);
+      lastY = y;
+    }
+    if (line.length) out.push(line.join(" "));
+    out.push("");
+  }
+  return out.join("\n");
+}
+
+// Read .eml text (UTF-8 best effort). Most modern Tesco emails are
+// quoted-printable encoded; we apply a light decode pass for =E2=80=99 etc.
+async function readEmlText(file){
+  const raw = await file.text();
+  // Split headers from body
+  const idx = raw.search(/\r?\n\r?\n/);
+  let body = idx >= 0 ? raw.slice(idx) : raw;
+
+  // If multipart, try to pluck the text/html or text/plain part
+  const boundaryMatch = raw.match(/boundary="?([^";\r\n]+)"?/i);
+  if (boundaryMatch) {
+    const boundary = boundaryMatch[1];
+    const parts = body.split("--" + boundary);
+    // Prefer text/html (Tesco receipts are HTML); fall back to text/plain
+    const html = parts.find(p => /content-type:\s*text\/html/i.test(p));
+    const plain = parts.find(p => /content-type:\s*text\/plain/i.test(p));
+    const chosen = html || plain || body;
+    const hdrEnd = chosen.search(/\r?\n\r?\n/);
+    body = hdrEnd >= 0 ? chosen.slice(hdrEnd) : chosen;
+  }
+
+  // Decode quoted-printable softlines + escapes
+  body = body
+    .replace(/=\r?\n/g, "")
+    .replace(/=([0-9A-Fa-f]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
+
+  // Strip HTML tags but keep text
+  body = body
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|tr|li|h[1-6])>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&pound;/g, "£")
+    .replace(/&#163;/g, "£")
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n\s*\n/g, "\n\n");
+
+  return body;
+}
+
+// Detect retailer from text — minimal viable: Tesco only for now,
+// flag unknown so the user knows manual parse needed.
+function detectRetailer(text, fileName){
+  const t = (text || "").toLowerCase();
+  const n = (fileName || "").toLowerCase();
+  if (/tesco\.com|tesco\b/.test(t) || /tesco/.test(n)) return "tesco";
+  if (/ocado/.test(t) || /ocado/.test(n)) return "ocado";
+  if (/sainsbury/.test(t) || /sainsbury/.test(n)) return "sainsburys";
+  if (/waitrose/.test(t) || /waitrose/.test(n)) return "waitrose";
+  return null;
+}
+
+// Parse a Tesco receipt text blob. Best-effort regex extraction designed to
+// produce the same shape as the Python skill. Sets parse_quality flags when
+// confidence is low.
+function parseTesco(rawText){
+  const text = rawText.replace(/\u00a0/g, " ");
+  const order = {
+    retailer: "tesco",
+    order_number: null,
+    email_type: null,
+    delivery_date: null,
+    order_placed_date: null,
+    total_paid_gbp: null,
+    total_saved_gbp: null,
+    item_count: 0,
+    purchased_count: 0,
+    substitution_count: 0,
+    unavailable_count: 0,
+    parse_quality: "ok",
+    parse_warning: null,
+    items: [],
+  };
+
+  // Order number — usually 4-4-2 or 4-4-X digits
+  const orderNumMatch = text.match(/order\s*(?:number|#|reference)?[:\s]*([\d]{4}[-\s]?[\d]{4}[-\s]?[\d]{2,4})/i)
+                     || text.match(/\b(\d{4}-\d{4}-\d{2,4})\b/);
+  if (orderNumMatch) {
+    order.order_number = orderNumMatch[1].replace(/\s/g, "-");
+  }
+
+  // Email type from subject keywords if present
+  if (/receipt for your tesco/i.test(text))      order.email_type = "receipt";
+  else if (/order.*is confirmed|confirmation/i.test(text)) order.email_type = "confirmation";
+  else if (/you'?ve made changes|amendment/i.test(text))   order.email_type = "amendment";
+
+  // Delivery date
+  // e.g. "Delivery on Mon, 11 May 2026" or "today" or "tomorrow"
+  const dateMatch = text.match(/deliver(?:y|ed)\s+(?:on\s+)?(?:[A-Za-z]+,?\s+)?(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})/i)
+                 || text.match(/(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})/);
+  if (dateMatch) {
+    const day = parseInt(dateMatch[1], 10);
+    const monthName = dateMatch[2];
+    const year = parseInt(dateMatch[3], 10);
+    const months = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
+    const mIdx = months.findIndex(m => monthName.toLowerCase().startsWith(m));
+    if (mIdx >= 0) {
+      const d = new Date(Date.UTC(year, mIdx, day));
+      order.delivery_date = d.toISOString().slice(0,10);
+    }
+  }
+
+  // Total paid — look for "Total" followed by £X.XX, taking the largest match
+  const totalMatches = [...text.matchAll(/(?:total\s+(?:paid|charged|cost)?|order\s+total|grand\s+total)[:\s]*£?\s*(\d+\.\d{2})/gi)];
+  if (totalMatches.length) {
+    order.total_paid_gbp = Math.max(...totalMatches.map(m => parseFloat(m[1])));
+  } else {
+    const allTotals = [...text.matchAll(/£\s*(\d+\.\d{2})/g)].map(m => parseFloat(m[1]));
+    if (allTotals.length) {
+      // Heuristic: total is usually the largest single £ value on a receipt
+      order.total_paid_gbp = Math.max(...allTotals);
+    }
+  }
+
+  // Saved
+  const savedMatch = text.match(/(?:saved|savings|clubcard\s+price\s+savings?)[:\s]*£?\s*(\d+\.\d{2})/i);
+  if (savedMatch) order.total_saved_gbp = parseFloat(savedMatch[1]);
+
+  // Items: try to find lines that look like "<qty>  <name>  £<unit>  £<total>"
+  // Tesco uses sections (Fridge, Freezer, Cupboard, Unavailable items, etc.)
+  const lines = text.split(/\n+/).map(l => l.trim()).filter(Boolean);
+  let currentSection = "cupboard";
+  let inUnavailable = false;
+
+  // Section headers
+  const sectionMap = [
+    [/^fridge\b/i,              "fridge"],
+    [/^freezer\b/i,              "freezer"],
+    [/^cupboard\b/i,             "cupboard"],
+    [/^fresh\b|^produce\b/i,    "fresh"],
+    [/^bakery\b/i,               "bakery"],
+    [/^drinks\b|^beverages\b/i, "drinks"],
+    [/^household\b|^toiletries\b/i, "household"],
+    [/unavailable/i,             "unavailable"],
+  ];
+
+  for (let line of lines) {
+    // Section detection — short headerish lines
+    if (line.length < 40) {
+      for (const [rgx, name] of sectionMap) {
+        if (rgx.test(line.trim())) {
+          currentSection = name;
+          inUnavailable = (name === "unavailable");
+          break;
+        }
+      }
+    }
+
+    // Item line patterns:
+    //   "2  Boursin Garlic & Herbs Soft Cheese 150g  £3.70  £7.40"
+    //   "1 x Tofoo Naked Tofu 280g £2.75"
+    //   Some PDFs collapse spaces — be flexible
+    const m = line.match(/^(\d+)\s*(?:x\s+)?(.+?)\s+£\s*(\d+\.\d{2})(?:\s+£\s*(\d+\.\d{2}))?\s*$/);
+    if (m) {
+      const qty  = parseInt(m[1], 10);
+      const name = m[2].trim();
+      const p1   = parseFloat(m[3]);
+      const p2   = m[4] ? parseFloat(m[4]) : null;
+      // Sanity: name should have at least one letter, not be a section header
+      if (!/[A-Za-z]/.test(name)) continue;
+      if (/^(total|subtotal|order|delivery|saved|clubcard)\b/i.test(name)) continue;
+      order.items.push({
+        qty,
+        name,
+        unit_price_gbp:  p2 != null ? p1 : (qty ? +(p1/qty).toFixed(2) : p1),
+        total_price_gbp: p2 != null ? p2 : p1,
+        saved_gbp: null,
+        section: inUnavailable ? "unavailable" : currentSection,
+        status: inUnavailable ? "unavailable" : "purchased",
+        substituted_for: null,
+      });
+    } else if (inUnavailable) {
+      // Unavailable items often have no price line; capture as "1 X NAME"
+      const um = line.match(/^(\d+)\s*(?:x\s+)?([A-Za-z].{3,})$/);
+      if (um) {
+        order.items.push({
+          qty: parseInt(um[1], 10),
+          name: um[2].trim(),
+          unit_price_gbp: null,
+          total_price_gbp: null,
+          saved_gbp: null,
+          section: "unavailable",
+          status: "unavailable",
+          substituted_for: null,
+        });
+      }
+    }
+  }
+
+  // Counts
+  order.item_count       = order.items.length;
+  order.purchased_count  = order.items.filter(i => i.status === "purchased").length;
+  order.unavailable_count = order.items.filter(i => i.status === "unavailable").length;
+
+  // Sanity checks
+  const lineItemsTotal = order.items
+    .filter(i => i.status === "purchased")
+    .reduce((s, i) => s + (i.total_price_gbp || 0), 0);
+  if (order.total_paid_gbp && lineItemsTotal > 0) {
+    const gap = order.total_paid_gbp - lineItemsTotal;
+    if (gap > 5 && (gap / order.total_paid_gbp) > 0.15) {
+      order.parse_quality = "truncated_likely";
+      order.parse_warning = `Line items sum to £${lineItemsTotal.toFixed(2)} but order total is £${order.total_paid_gbp.toFixed(2)} (£${gap.toFixed(2)} gap). Email may be truncated.`;
+    }
+  }
+  if (!order.items.length) {
+    order.parse_quality = "no_items_found";
+    order.parse_warning = "No line items could be extracted. The receipt format may be unsupported.";
+  }
+  if (!order.delivery_date) {
+    order.parse_quality = order.parse_quality === "ok" ? "missing_date" : order.parse_quality;
+    if (!order.parse_warning) order.parse_warning = "Could not extract delivery date — fill it in manually.";
+  }
+
+  return order;
+}
+
+// React component: drop zone + parsed-receipt preview
+function ReceiptParser(){
+  const [status, setStatus]   = useState("idle"); // idle | loading | done | error
+  const [parsed, setParsed]   = useState(null);
+  const [errorMsg, setError]  = useState(null);
+  const [fileName, setFileName] = useState(null);
+  const [showJson, setShowJson] = useState(false);
+  const [copiedTick, setCopiedTick] = useState(false);
+  const inputRef = useRef(null);
+
+  const handleFile = useCallback(async (file) => {
+    if (!file) return;
+    setStatus("loading");
+    setError(null);
+    setParsed(null);
+    setFileName(file.name);
+    setShowJson(false);
+    try {
+      let text;
+      const lower = file.name.toLowerCase();
+      if (lower.endsWith(".pdf") || file.type === "application/pdf") {
+        text = await extractPdfText(file);
+      } else if (lower.endsWith(".eml") || file.type === "message/rfc822") {
+        text = await readEmlText(file);
+      } else {
+        // Best effort: try as text
+        text = await file.text();
+      }
+      const retailer = detectRetailer(text, file.name);
+      if (retailer !== "tesco") {
+        setStatus("error");
+        setError(retailer
+          ? `Detected retailer "${retailer}" — only Tesco is supported in-app right now. Use the grocery-receipt-archive skill in a Claude session for other retailers.`
+          : "Couldn't identify the retailer. Only Tesco receipts are currently supported in-app.");
+        return;
+      }
+      const order = parseTesco(text);
+      order.source_file = file.name;
+      setParsed(order);
+      setStatus("done");
+    } catch (e) {
+      console.error("Receipt parse error", e);
+      setStatus("error");
+      setError(e.message || "Failed to read the file.");
+    }
+  }, []);
+
+  const onDrop = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const f = e.dataTransfer?.files?.[0];
+    if (f) handleFile(f);
+  }, [handleFile]);
+
+  const onDragOver = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
+  const jsonBlob = parsed ? JSON.stringify(parsed, null, 2) : "";
+
+  const copyJson = async () => {
+    if (!jsonBlob) return;
+    try {
+      await navigator.clipboard.writeText(jsonBlob);
+      setCopiedTick(true);
+      setTimeout(() => setCopiedTick(false), 1800);
+    } catch {
+      // Fallback: select-and-prompt
+      window.prompt("Copy this JSON:", jsonBlob);
+    }
+  };
+
+  return <Section title="Add receipt" subtitle="Parse a Tesco .eml or .pdf receipt — preview only"
+    collapsible defaultOpen={false}
+    tip="Drop a Tesco receipt (.eml email export or .pdf invoice) here to extract items, total, and Khalil-allergen flags. This is a preview — the parsed order is not written to the archive automatically. Use the 'Copy JSON' button to paste it into a Claude session for permanent storage.">
+
+    <div onDrop={onDrop} onDragOver={onDragOver}
+         className="border-2 border-dashed border-stone-300 rounded-lg p-4 text-center bg-stone-50/50 hover:bg-stone-50 transition-colors">
+      <div className="text-sm text-stone-600 mb-2">
+        Drop a <span className="mono">.eml</span> or <span className="mono">.pdf</span> here, or
+      </div>
+      <input ref={inputRef} type="file" accept=".eml,.pdf,message/rfc822,application/pdf"
+             className="hidden"
+             onChange={(e) => handleFile(e.target.files?.[0])} />
+      <button onClick={() => inputRef.current?.click()}
+              className="px-3 py-1.5 text-sm rounded border border-stone-300 bg-white hover:bg-stone-100">
+        Choose file…
+      </button>
+      <div className="text-[11px] text-stone-500 mt-2">
+        Tesco only. PDF support requires loading pdf.js (~1MB) on first use.
+      </div>
+    </div>
+
+    {status === "loading" && (
+      <div className="mt-3 text-sm text-stone-500">
+        Parsing <span className="mono">{fileName}</span>…
+      </div>
+    )}
+
+    {status === "error" && (
+      <div className="mt-3 text-sm bg-rose-50 border border-rose-200 text-rose-800 rounded px-3 py-2">
+        <strong>Couldn't parse {fileName}.</strong> {errorMsg}
+      </div>
+    )}
+
+    {status === "done" && parsed && (
+      <div className="mt-3 space-y-3">
+        {parsed.parse_quality !== "ok" && (
+          <div className="text-xs bg-amber-50 border border-amber-200 text-amber-800 rounded px-3 py-2">
+            ⚠️ <strong>{parsed.parse_quality.replace(/_/g, " ")}.</strong> {parsed.parse_warning}
+          </div>
+        )}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <KV label="Date"        value={parsed.delivery_date ? formatDate(parsed.delivery_date) : "—"} sub={parsed.email_type || "tesco"}/>
+          <KV label="Order #"     value={parsed.order_number || "—"}/>
+          <KV label="Total"       value={parsed.total_paid_gbp != null ? `£${parsed.total_paid_gbp.toFixed(2)}` : "—"} sub={parsed.total_saved_gbp ? `saved £${parsed.total_saved_gbp.toFixed(2)}` : null}/>
+          <KV label="Items"       value={`${parsed.purchased_count} delivered`} sub={parsed.unavailable_count ? `${parsed.unavailable_count} unavailable` : null}/>
+        </div>
+
+        {/* Khalil allergen flags */}
+        {(() => {
+          const flagged = (parsed.items || [])
+            .filter(it => it.status === "purchased")
+            .map(it => ({ ...it, _allergen: ordersKhalilFlag(it.name) }))
+            .filter(it => it._allergen);
+          if (!flagged.length) return null;
+          return (
+            <div className="text-xs bg-amber-50 border border-amber-200 rounded px-3 py-2">
+              <div className="font-medium text-amber-800 mb-1">⚠️ {flagged.length} Khalil-allergen items in this order:</div>
+              <div className="flex flex-wrap gap-1.5">
+                {flagged.map((it, i) => (
+                  <span key={i} className="chip" title={`Flagged as ${it._allergen}`}>
+                    <span className="text-amber-700">{it._allergen}</span>
+                    <span className="truncate max-w-[180px]">{it.name}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Items table */}
+        <details className="card">
+          <summary className="px-3 py-2 text-sm font-medium cursor-pointer select-none">
+            ▶ All {parsed.items.length} parsed items
+          </summary>
+          <div className="px-3 pb-3 text-xs border-t border-stone-100 pt-2 overflow-x-auto">
+            <table className="w-full">
+              <thead><tr className="text-stone-500">
+                <th className="text-left py-1 w-8">Qty</th>
+                <th className="text-left">Item</th>
+                <th className="text-left w-24">Section</th>
+                <th className="text-right w-16">£/each</th>
+                <th className="text-right w-16">Total</th>
+                <th className="text-center w-16">Status</th>
+                <th className="text-center w-16">Khalil</th>
+              </tr></thead>
+              <tbody>{parsed.items.map((it, i) => {
+                const k = ordersKhalilFlag(it.name);
+                return <tr key={i} className="border-t border-stone-100">
+                  <td className="py-1 mono">{it.qty}</td>
+                  <td>{it.name}</td>
+                  <td className="text-stone-500">{it.section || "—"}</td>
+                  <td className="text-right mono">{it.unit_price_gbp != null ? `£${it.unit_price_gbp.toFixed(2)}` : "—"}</td>
+                  <td className="text-right mono">{it.total_price_gbp != null ? `£${it.total_price_gbp.toFixed(2)}` : "—"}</td>
+                  <td className="text-center">{it.status === "unavailable" ? <Chip tone="danger">unavail</Chip> : <span className="text-stone-400">·</span>}</td>
+                  <td className="text-center">{k ? <Chip tone="warn">{k}</Chip> : <span className="text-emerald-600">✓</span>}</td>
+                </tr>;
+              })}</tbody>
+            </table>
+          </div>
+        </details>
+
+        {/* JSON output + copy */}
+        <div className="card p-3 bg-stone-50">
+          <div className="flex items-baseline justify-between mb-2 flex-wrap gap-2">
+            <div className="text-sm font-medium">Order JSON</div>
+            <div className="flex items-center gap-2">
+              <button onClick={() => setShowJson(s => !s)}
+                      className="text-xs px-2 py-1 rounded border border-stone-300 bg-white hover:bg-stone-100">
+                {showJson ? "Hide" : "Show"}
+              </button>
+              <button onClick={copyJson}
+                      className="text-xs px-2 py-1 rounded border border-teal-700 bg-teal-700 text-white hover:bg-teal-800">
+                {copiedTick ? "Copied ✓" : "Copy JSON"}
+              </button>
+            </div>
+          </div>
+          {showJson && (
+            <pre className="text-[10px] mono bg-white border border-stone-200 rounded p-2 max-h-64 overflow-auto whitespace-pre-wrap">{jsonBlob}</pre>
+          )}
+          <div className="text-[11px] text-stone-600 mt-2">
+            <strong>Preview only.</strong> To add this to your canonical archive, paste this JSON into a fresh Claude session and ask: <em>"append this Tesco order to orders.json"</em>. The skill will dedupe by <span className="mono">order_number</span>, re-sort, and persist to Supabase.
+          </div>
+        </div>
+      </div>
+    )}
+  </Section>;
 }
 
 function OrdersView(){
@@ -1903,8 +2843,11 @@ function OrdersView(){
   }, [orders]);
 
   if (!orders.length) {
-    return <div className="card p-6 text-sm text-stone-500 text-center">
-      No order history embedded. Tesco orders come from the project's <span className="mono">tesco-orders.json</span> file.
+    return <div className="space-y-4">
+      <div className="card p-6 text-sm text-stone-500 text-center">
+        No order history loaded yet. Receipts come from Supabase; if this persists, check the network tab.
+      </div>
+      <ReceiptParser/>
     </div>;
   }
 
@@ -1914,8 +2857,9 @@ function OrdersView(){
     <div className="text-xs text-stone-600 bg-stone-50 border border-stone-200 rounded-lg px-3 py-2">
       <strong>Read-only history.</strong> {orders.length} Tesco orders parsed from receipt emails between {formatDate(orders[0].delivery_date)} and {formatDate(orders[orders.length-1].delivery_date)}.
       Useful for spotting patterns (what you buy regularly), tracking Khalil's allergen exposure across past deliveries, and reviewing substitutions.
-      This tab can't be edited in-app — receipts are added in a Claude session.
+      The history can't be edited in-app — to add a new order permanently, parse it below to preview, then paste the JSON into a Claude session.
     </div>
+    <ReceiptParser/>
     <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
       <KV label="Orders" value={orders.length} sub={`${formatDate(orders[0].delivery_date)} → ${formatDate(orders[orders.length-1].delivery_date)}`}/>
       <KV label="Total spend" value={`£${stats.totalSpend.toFixed(0)}`} sub="Across all orders"/>
@@ -1932,6 +2876,7 @@ function OrdersView(){
     </Section>
 
     <Section title={`Order history · ${orders.length} orders`} subtitle="Click any order to see line items, substitutions, and unavailable items"
+      collapsible defaultOpen={false}
       tip="Every parsed Tesco delivery. Each row shows item count, substitutions (sub), unavailable items, Khalil-allergen exposure (⚠️), and total. Click to expand into the full receipt.">
       <div className="space-y-1.5">
         {orders.slice().reverse().map(o => {
@@ -1992,6 +2937,7 @@ function OrdersView(){
     </Section>
 
     <Section title="Repeat-purchase patterns" subtitle={`${stats.trends.filter(t=>t.count>=2).length} items bought across 2+ orders`}
+      collapsible defaultOpen={false}
       tip="Items appearing in 2+ orders, sorted by order count then by total spend. Useful for identifying reliable staples to keep on auto-add.">
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
         {stats.trends.filter(t=>t.count>=2).slice(0,30).map((t,i)=> <div key={i} className="card px-2.5 py-1.5 flex items-center justify-between text-xs gap-2">
@@ -2981,7 +3927,7 @@ function App(){
   // will surface with needs_sku_lookup=true until the data arrives, which
   // is intentional: Step 3 will render that as a visible warning chip
   // rather than silently dropping the item.
-  const [skuIndex, setSkuIndex] = useState(new Map());
+  const [skuIndex, setSkuIndex] = useState({ byKey: new Map(), byTescoName: new Map(), all: [] });
   // recipesLoaded triggers a re-render once the module-level RECIPES
   // array has been populated (it's read directly by many components).
   const [recipesLoaded, setRecipesLoaded] = useState(false);
