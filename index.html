@@ -110,9 +110,17 @@ const { useState, useMemo, useEffect, useCallback, useRef, createContext, useCon
 // (2) only apply changes not already listed, (3) append a new
 // entry below describing what they changed.
 // ============================================================
-const SITE_VERSION = "2026-05-15.8";
+const SITE_VERSION = "2026-05-15.9";
 const SITE_CHANGELOG = [
   // newest first
+  { version: "2026-05-15.9", date: "2026-05-15", changes: [
+    "**Home page declutter: secondary header removed.** The old `<h1>Grocery intelligence</h1>` block (with its `recipes · pantry items · expiring soon · cooked · orders` counter line, last-receipt date, and ? Help button) is gone. The brand block at the top of the page (Larder wordmark + jar + delivery countdown) is now the only thing above the tab nav.",
+    "**Help button moved.** The `? Help` pill that used to live in the top-right of the App secondary header now sits alongside the modern/retro style toggle in the brand block. Same behaviour — opens the HelpBanner.",
+    "**Global counters relocated to the Stats tab.** The five-counter strip (`178 recipes · 86 pantry items · 16 expiring soon · 0 cooked · 13 orders`) plus the `last receipt: ...` label now lead the Stats tab, sitting above the Workflow integrity card. Replaces the old 'Library health check' explanatory blurb. AuditView now takes `cooked` and `outOfStock` props and reads `receipts` from context.",
+    "**Orders tab: explanatory blurb deleted.** The 'Order history. N Tesco orders between ... and ...' paragraph above ReceiptParser is gone. The KPI row and section titles already say everything that blurb said.",
+    "**Brand tagline moved.** \"What's in your kitchen?\" now sits directly under the changelog footer with a small (mt-3) gap rather than below a divider — quieter, less section-break-y.",
+    "**Internal cleanup.** App-scope `orderCount`, `lastReceiptDate`, and `expiringCount` declarations removed (their only consumer was the deleted secondary header). The equivalents are now computed inside AuditView where they're needed.",
+  ]},
   { version: "2026-05-15.8", date: "2026-05-15", changes: [
     "**Crash fix (proper this time): React error #310 — hook order violation.** v7's fix for the `nextDelivery is not defined` error put the `useMemo` between the second and third early-returns in App. That meant the hook only ran on the happy-path render, not on the loading or loadError renders — different hook count between renders = React error #310. Moved the `useMemo` above all three early-returns (loading / loadError / no-data) so the hook order is identical on every render path. Note to self: 'above the early-return' isn't enough when there are multiple early-returns above it too.",
   ]},
@@ -3144,11 +3152,6 @@ function OrdersView(){
   const maxSection = Math.max(...stats.sectionTotals.map(([,v])=>v), 1);
 
   return <div className="space-y-5">
-    <div className="text-xs text-stone-600 bg-stone-50 border border-stone-200 rounded-lg px-3 py-2">
-      <strong>Order history.</strong> {orders.length} Tesco orders between {formatDate(orders[0].delivery_date)} and {formatDate(orders[orders.length-1].delivery_date)}.
-      Useful for spotting patterns, tracking Khalil's allergen exposure across past deliveries, and reviewing substitutions.
-      To add a new order, drop the receipt into the parser below and click <strong>Save to archive</strong>.
-    </div>
     <ReceiptParser/>
     <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
       <KV label="Orders" value={orders.length} sub={`${formatDate(orders[0].delivery_date)} → ${formatDate(orders[orders.length-1].delivery_date)}`}/>
@@ -4093,8 +4096,17 @@ function GapsView({pantry, outOfStock}){
 }
 
 // ===== Audit view =====
-function AuditView({pantry}){
+function AuditView({pantry, cooked, outOfStock}){
   const allergens = useContext(AllergensContext);
+  const receipts = useContext(ReceiptsContext);
+  // Global counters shown at the very top of the tab — moved here from the App
+  // header in v9 so the home page stays focused on the brand block + tab nav.
+  const oosSet = outOfStock || new Set();
+  const expiringCount = pantry.filter(p=>!oosSet.has(p.item) && daysUntilExpiry(p)!==null && daysUntilExpiry(p)<=5).length;
+  const cookedCount = (cooked || []).length;
+  const lastReceiptDate = receipts.length
+    ? receipts.map(r => r.delivery_date).filter(Boolean).sort().pop()
+    : null;
   const decorated = useMemo(()=> RECIPES.map(r=>{
     const f = flagsForRecipe(r, allergens);
     return {...r, _flags:f, _audience: r.audience || audienceFromFlags(f)};
@@ -4124,8 +4136,19 @@ function AuditView({pantry}){
   });
 
   return <div className="space-y-5">
-    <div className="text-xs text-stone-600 bg-stone-50 border border-stone-200 rounded-lg px-3 py-2">
-      <strong>Library health check.</strong> Quick stats about the recipe library and pantry coverage — useful for spotting gaps in the data (missing tags, untagged recipes, manifest mismatches) rather than gaps in your basket.
+    <div className="text-stone-600 text-sm border border-stone-200 rounded-lg px-4 py-3 flex flex-wrap items-baseline justify-between gap-3">
+      <div className="flex flex-wrap items-baseline gap-x-1">
+        <span title="Total recipes across all sources">{RECIPES.length} recipes</span>
+        <span className="text-stone-300">·</span>
+        <span title="Items currently tracked in your pantry">{pantry.length} pantry items</span>
+        <span className="text-stone-300">·</span>
+        <span title="Pantry items expiring in 5 days or fewer">{expiringCount} expiring soon</span>
+        <span className="text-stone-300">·</span>
+        <span title="Recipes you've marked cooked in this browser">{cookedCount} cooked</span>
+        <span className="text-stone-300">·</span>
+        <span title="Tesco deliveries parsed from receipt emails">{receipts.length} orders</span>
+      </div>
+      <span className="text-xs text-stone-500 mono">{lastReceiptDate ? `last receipt: ${formatDate(lastReceiptDate)}` : "no receipts yet"}</span>
     </div>
     <Section title="Workflow integrity" subtitle="Health check — green means all good, amber means a small fix is needed" tone="ok"
       tip="Each card reports on one data-quality dimension: are all recipes tagged with an audience, are all pantry items tagged with an allergen flag, etc. Status chip on each card: ✓ OK = nothing to do, ⚠ Fix needed = small repair recommended, ⚠ Critical action needed = fix before relying on this data.">
@@ -4207,7 +4230,7 @@ function GapCard({label, value, of, severity, note}){
 // Style toggle (modern/retro) controls both the in-page mark AND the
 // browser tab favicon. Choice persists via localStorage.
 // ============================================================================
-function LarderBrand({ pantry, nextDelivery }) {
+function LarderBrand({ pantry, nextDelivery, showHelpBanner, setShowHelpBanner }) {
   // Load saved style on first render. Default to "modern" if nothing saved.
   const [style, setStyle] = useState(() => {
     try { return localStorage.getItem("larder-brand-style") || "modern"; }
@@ -4335,6 +4358,7 @@ function LarderBrand({ pantry, nextDelivery }) {
                 className="pill" title="Clean forest-green jar">modern</button>
         <button onClick={() => setStyle("retro")} data-active={style === "retro"}
                 className="pill" title="16-bit pixel-art jar">retro</button>
+        {setShowHelpBanner && !showHelpBanner && <button onClick={() => setShowHelpBanner(true)} className="pill ml-1" title="Reopen the introduction panel">? Help</button>}
       </div>
     </div>
   );
@@ -4345,7 +4369,7 @@ function LarderBrand({ pantry, nextDelivery }) {
 // ============================================================================
 function LarderFooter() {
   return (
-    <footer className="mt-12 pt-8 pb-6 text-center border-t border-stone-200">
+    <footer className="mt-3 pb-6 text-center">
       <p className="text-stone-400 text-sm tracking-wide"
          style={{ fontFamily: "Georgia, 'Times New Roman', serif", fontStyle: "italic" }}>
         What's in your kitchen?
@@ -4922,14 +4946,6 @@ function App(){
     };
   }, []);
 
-  const expiringCount = pantry.filter(p=>!outOfStock.has(p.item) && daysUntilExpiry(p)!==null && daysUntilExpiry(p)<=5).length;
-  const orderCount = receipts.length;
-  // Newest receipt's delivery_date — drives the "last receipt: ..." label in the header.
-  // receipts can be empty during loading or on a totally fresh setup.
-  const lastReceiptDate = receipts.length
-    ? receipts.map(r => r.delivery_date).filter(Boolean).sort().pop()
-    : null;
-
   // ---- Loading + error gates ----
   // Estimate next delivery date from receipt cadence — passed to LarderBrand so the
   // pantry-status subtitle can say "Delivery in Nd · pantry X% full". Defined here at
@@ -4972,27 +4988,8 @@ function App(){
   <AllergensContext.Provider value={allergens}>
   <TescoSkusContext.Provider value={skuIndex}>
   <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-10">
-    <LarderBrand pantry={pantry} nextDelivery={nextDelivery} />
-    <header className="flex flex-wrap items-end justify-between gap-3 mb-4">
-      <div>
-        <h1 className="text-3xl font-semibold tracking-tight">Grocery intelligence</h1>
-        <p className="text-stone-500 text-sm mt-1">
-          <span title="Total recipes across all sources">{RECIPES.length} recipes</span>
-          {" · "}
-          <span title="Items currently tracked in your pantry">{pantry.length} pantry items</span>
-          {" · "}
-          <span title="Pantry items expiring in 5 days or fewer">{expiringCount} expiring soon</span>
-          {" · "}
-          <span title="Recipes you've marked cooked in this browser">{cooked.length} cooked</span>
-          {" · "}
-          <span title="Tesco deliveries parsed from receipt emails">{orderCount} orders</span>
-        </p>
-      </div>
-      <div className="text-xs text-stone-500 mono flex flex-col items-end gap-1">
-        <span>{lastReceiptDate ? `last receipt: ${formatDate(lastReceiptDate)}` : "no receipts yet"}</span>
-        {!showHelpBanner && <button onClick={()=>setShowHelpBanner(true)} className="pill" title="Reopen the introduction panel">? Help</button>}
-      </div>
-    </header>
+    <LarderBrand pantry={pantry} nextDelivery={nextDelivery}
+                 showHelpBanner={showHelpBanner} setShowHelpBanner={setShowHelpBanner} />
 
     {showHelpBanner && <HelpBanner onDismiss={dismissHelpBanner}/>}
 
@@ -5018,7 +5015,7 @@ function App(){
     {tab==="pantry" && <PantryView pantry={pantry} outOfStock={outOfStock} toggleOutOfStock={toggleOutOfStock} qtyAdjustments={qtyAdjustments} adjustQty={adjustQty} syncErrors={syncErrors}/>}
     {tab==="tesco" && <OrdersView/>}
     {tab==="gaps" && <GapsView pantry={pantry} outOfStock={outOfStock}/>}
-    {tab==="audit" && <AuditView pantry={pantry}/>}
+    {tab==="audit" && <AuditView pantry={pantry} cooked={cooked} outOfStock={outOfStock}/>}
 
     <footer className="text-xs text-stone-400 mt-8 text-center space-y-1">
       <div>Synced to Supabase{STORAGE_OK ? " ✓" : " ✗"} across devices</div>
