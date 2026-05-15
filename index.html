@@ -110,9 +110,13 @@ const { useState, useMemo, useEffect, useCallback, useRef, createContext, useCon
 // (2) only apply changes not already listed, (3) append a new
 // entry below describing what they changed.
 // ============================================================
-const SITE_VERSION = "2026-05-15.11";
+const SITE_VERSION = "2026-05-15.12";
 const SITE_CHANGELOG = [
   // newest first
+  { version: "2026-05-15.12", date: "2026-05-15", changes: [
+    "**Basket tab: SuggestedBasket moved below the KPI row.** KPI strip now leads (Orders tracked / Latest delivery / Regulars / Real gaps / Excluded by rules), then the basket, then the rest of the view. Same content, KPIs first so you read the state before the action.",
+    "**Orders tab: ReceiptParser moved below the KPI row.** Same reasoning — KPI strip leads (Orders / Total spend / Avg order / Items bought / Savings / Substitutions / Unavailable), then the add-receipt section, then the chart and order history.",
+  ]},
   { version: "2026-05-15.11", date: "2026-05-15", changes: [
     "**Suggested next basket moved from Cook to Basket (formerly Gaps).** Extracted the basket logic (priceIndex / gapAnalysis / nextDelivery memos, basket useMemo, openedSkus state, openableItems / blockedItems / openNext / resetOpened / buildBasketPayload / downloadBasketJson / copyBasketJson handlers, plus the UI Section — ~230 lines of logic + 171 lines of JSX) into a standalone `<SuggestedBasket pantry outOfStock/>` component sitting above PlannerView. The Basket view renders `<SuggestedBasket>` at the top of its main return; PlannerView (Cook) no longer carries any basket code. SuggestedBasket recomputes its own matchSet/decorated/leverage useMemos for self-containment — duplicates the work PlannerView still does, but the cost is trivial and the boundary is clean.",
     "**Tab label 'Gaps' renamed to 'Basket'.** Internal key stays `gaps` so deep links and tab state survive. Subtitle copy updated alongside.",
@@ -3185,7 +3189,6 @@ function OrdersView(){
   const maxSection = Math.max(...stats.sectionTotals.map(([,v])=>v), 1);
 
   return <div className="space-y-5">
-    <ReceiptParser/>
     <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
       <KV label="Orders" value={orders.length} sub={`${formatDate(orders[0].delivery_date)} → ${formatDate(orders[orders.length-1].delivery_date)}`}/>
       <KV label="Total spend" value={`£${stats.totalSpend.toFixed(0)}`} sub="Across all orders"/>
@@ -3195,6 +3198,8 @@ function OrdersView(){
       <KV label="Substitutions" value={stats.totalSubs} sub="Items swapped by Tesco"/>
       <KV label="Unavailable" value={stats.totalUnavail} sub="Ordered, not delivered"/>
     </div>
+
+    <ReceiptParser/>
 
     <Section title="Spend over time" subtitle="Order totals, oldest → newest" tone="info"
       tip="Each bar is one delivery. Useful for spotting big top-up shops vs. regular weekly shops.">
@@ -3997,7 +4002,6 @@ function GapsView({pantry, outOfStock}){
   }, [visibleRaw, regSortBy, regSortDir]);
 
   return <div className="space-y-5">
-    <SuggestedBasket pantry={pantry} outOfStock={outOfStock}/>
     <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
       <Stat label="Orders tracked" value={analysis.orderCount}
         tip="Number of Tesco orders parsed from receipts. The more orders, the more reliable the 'regulars' detection."/>
@@ -4013,6 +4017,8 @@ function GapsView({pantry, outOfStock}){
             tipAlign="right"
             tip="Items the household has explicitly told the system not to suggest restocking (e.g. dairy milk — no one drinks it). View the rule list by clicking the 'Excluded' filter pill."/>
     </div>
+
+    <SuggestedBasket pantry={pantry} outOfStock={outOfStock}/>
 
     <Section title="Pick your basket gaps" tone="info" collapsible defaultOpen={false}
       tip="Compares the items you buy most often against what you currently have. Filters by category below.">
