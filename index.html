@@ -11,12 +11,17 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<title>Grocery Intelligence — Household Dashboard</title>
+<title>Larder — What's in your kitchen?</title>
   <link rel="manifest" href="manifest.json">
-<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<!-- Larder favicons — swapped at runtime by the brand-style toggle. -->
+<!-- The toggle script rewrites these hrefs when the user picks modern/retro, -->
+<!-- and the choice is persisted in localStorage so it survives reloads. -->
+<link id="favicon-touch" rel="apple-touch-icon" href="icons/larder-modern-apple-touch.png">
+<link id="favicon-192" rel="icon" type="image/png" sizes="192x192" href="icons/larder-modern-192.png">
+<link id="favicon-512" rel="icon" type="image/png" sizes="512x512" href="icons/larder-modern-512.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="apple-mobile-web-app-title" content="Grocery">
+<meta name="apple-mobile-web-app-title" content="Larder">
 <meta name="theme-color" content="#1c1c1c">
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
@@ -4171,6 +4176,164 @@ function GapCard({label, value, of, severity, note}){
   </div>;
 }
 
+// ============================================================================
+// LarderBrand — top-of-page toggle + jar logo. Lives ABOVE the existing
+// header so the brand mark and the data dashboard are visually separable.
+//
+// The jar SVG fills/empties based on average pantry confidence, weighted
+// toward fresh items expiring within the next 14 days. Fresh stuff matters
+// more because it's what's actually feeding the household this week — a
+// tin of beans at 95% confidence shouldn't make the jar look full when the
+// fridge is empty. On delivery day the lid turns brass as a small cue.
+//
+// Style toggle (modern/retro) controls both the in-page mark AND the
+// browser tab favicon. Choice persists via localStorage.
+// ============================================================================
+function LarderBrand({ pantry, nextDelivery }) {
+  // Load saved style on first render. Default to "modern" if nothing saved.
+  const [style, setStyle] = useState(() => {
+    try { return localStorage.getItem("larder-brand-style") || "modern"; }
+    catch { return "modern"; }
+  });
+
+  // Swap favicons + persist choice whenever style changes.
+  useEffect(() => {
+    try { localStorage.setItem("larder-brand-style", style); } catch {}
+    const t = document.getElementById("favicon-touch");
+    const i192 = document.getElementById("favicon-192");
+    const i512 = document.getElementById("favicon-512");
+    if (t) t.href = `icons/larder-${style}-apple-touch.png`;
+    if (i192) i192.href = `icons/larder-${style}-192.png`;
+    if (i512) i512.href = `icons/larder-${style}-512.png`;
+  }, [style]);
+
+  // Weighted average confidence — fresh items count double.
+  const fillPct = useMemo(() => {
+    if (!pantry || pantry.length === 0) return 50;
+    const today = new Date();
+    let totalWeight = 0;
+    let weightedConf = 0;
+    for (const item of pantry) {
+      if (!item || item.confidence == null) continue;
+      const exp = item.expires ? new Date(item.expires + "T12:00:00Z") : null;
+      const daysToExp = exp ? (exp - today) / (1000*60*60*24) : 365;
+      const isFresh = daysToExp <= 14 && daysToExp >= 0;
+      const weight = isFresh ? 2 : 1;
+      totalWeight += weight;
+      weightedConf += item.confidence * weight;
+    }
+    if (totalWeight === 0) return 50;
+    return Math.round(weightedConf / totalWeight);
+  }, [pantry]);
+
+  // Days to next delivery — used to brass the lid on delivery day.
+  const daysToDelivery = useMemo(() => {
+    if (!nextDelivery || !nextDelivery.date) return null;
+    const delivery = new Date(nextDelivery.date + "T12:00:00Z");
+    const today = new Date();
+    return Math.round((delivery - today) / (1000*60*60*24));
+  }, [nextDelivery]);
+  const isDeliveryToday = daysToDelivery === 0;
+
+  // --- Modern jar SVG: body fill clipped to jar shape ---
+  const renderModernJar = () => {
+    const innerTop = 12, innerBottom = 31;
+    const innerH = innerBottom - innerTop;
+    const fillH = (fillPct / 100) * innerH;
+    const fillY = innerBottom - fillH;
+    const lidColor = isDeliveryToday ? "#b89455" : "#1f4d2c";
+    return (
+      <svg width="44" height="56" viewBox="0 0 28 36" xmlns="http://www.w3.org/2000/svg"
+           aria-label={`Pantry at ${fillPct}%`}>
+        <defs>
+          <clipPath id="larder-jar-clip">
+            <path d="M 3 9 Q 3 6 6 6 L 22 6 Q 25 6 25 9 L 25 28 Q 25 31 22 31 L 6 31 Q 3 31 3 28 Z"/>
+          </clipPath>
+        </defs>
+        <rect x="6" y="0" width="16" height="5" rx="1.5" fill={lidColor}/>
+        <path d="M 3 9 Q 3 6 6 6 L 22 6 Q 25 6 25 9 L 25 28 Q 25 31 22 31 L 6 31 Q 3 31 3 28 Z"
+              fill="none" stroke="#1f4d2c" strokeWidth="1.2"/>
+        <rect x="2" y={fillY} width="25" height={fillH}
+              fill="#1f4d2c" clipPath="url(#larder-jar-clip)"/>
+      </svg>
+    );
+  };
+
+  // --- Retro pixel-art jar: cream overlay covers the "emptied" portion ---
+  // The retro PNG can't be repainted, so we drop a coloured div over the top
+  // of the jar interior proportional to how empty the pantry is. Olive colour
+  // matches the retro icon's background so the mask blends in.
+  const renderRetroJar = () => {
+    const emptyPct = 100 - fillPct;
+    const bodyTopPx = 19;  // top of jar body within the 56px-tall scaled image
+    const bodyHPx = 30;    // height of jar body
+    const maskHPx = (emptyPct / 100) * bodyHPx;
+    return (
+      <div style={{ position: "relative", width: 44, height: 56, flexShrink: 0 }}>
+        <img src="icons/larder-retro-192.png" alt={`Pantry at ${fillPct}%`}
+             width="44" height="56"
+             style={{ imageRendering: "pixelated", display: "block" }}/>
+        {maskHPx > 0 && (
+          <div style={{
+            position: "absolute",
+            left: "29%", right: "29%",
+            top: `${bodyTopPx}px`,
+            height: `${maskHPx}px`,
+            background: "#b9c660",
+            pointerEvents: "none",
+          }}/>
+        )}
+      </div>
+    );
+  };
+
+  // Delivery subtitle
+  let deliveryLine;
+  if (daysToDelivery === null) deliveryLine = "No upcoming delivery";
+  else if (isDeliveryToday) deliveryLine = "Delivery today";
+  else if (daysToDelivery === 1) deliveryLine = "Delivery tomorrow";
+  else if (daysToDelivery > 0) deliveryLine = `Delivery in ${daysToDelivery} days`;
+  else deliveryLine = "Delivery overdue";
+
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 mb-6 pb-4 border-b border-stone-200">
+      <div className="flex items-center gap-3">
+        {style === "modern" ? renderModernJar() : renderRetroJar()}
+        <div>
+          <h1 className="text-3xl font-semibold tracking-tight leading-none"
+              style={{ fontFamily: "Georgia, 'Times New Roman', serif", letterSpacing: "-0.02em" }}>
+            Larder
+          </h1>
+          <p className="text-stone-500 text-sm mt-1">
+            {deliveryLine} · pantry {fillPct}% full
+          </p>
+        </div>
+      </div>
+      <div className="flex items-center gap-1.5">
+        <span className="text-stone-400 mono" style={{ fontSize: "10px", letterSpacing: "1px" }}>STYLE</span>
+        <button onClick={() => setStyle("modern")} data-active={style === "modern"}
+                className="pill" title="Clean forest-green jar">modern</button>
+        <button onClick={() => setStyle("retro")} data-active={style === "retro"}
+                className="pill" title="16-bit pixel-art jar">retro</button>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// LarderFooter — quiet brand sign-off at the bottom of every page.
+// ============================================================================
+function LarderFooter() {
+  return (
+    <footer className="mt-12 pt-8 pb-6 text-center border-t border-stone-200">
+      <p className="text-stone-400 text-sm tracking-wide"
+         style={{ fontFamily: "Georgia, 'Times New Roman', serif", fontStyle: "italic" }}>
+        What's in your kitchen?
+      </p>
+    </footer>
+  );
+}
+
 // ===== Root =====
 function App(){
   const initialState = STORAGE_OK ? loadState() : null;
@@ -4688,6 +4851,7 @@ function App(){
   <AllergensContext.Provider value={allergens}>
   <TescoSkusContext.Provider value={skuIndex}>
   <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-10">
+    <LarderBrand pantry={pantry} nextDelivery={nextDelivery} />
     <header className="flex flex-wrap items-end justify-between gap-3 mb-4">
       <div>
         <h1 className="text-3xl font-semibold tracking-tight">Grocery intelligence</h1>
@@ -4746,6 +4910,7 @@ function App(){
         </div>
       </details>
     </footer>
+    <LarderFooter />
   </div>
   </TescoSkusContext.Provider>
   </AllergensContext.Provider>
