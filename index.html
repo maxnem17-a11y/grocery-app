@@ -11,7 +11,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<title>Larder — What's in your kitchen?</title>
+<title>Larder</title>
   <link rel="manifest" href="manifest.json">
 <!-- Larder favicons — swapped at runtime by the brand-style toggle. -->
 <!-- The toggle script rewrites these hrefs when the user picks modern/retro, -->
@@ -110,9 +110,16 @@ const { useState, useMemo, useEffect, useCallback, useRef, createContext, useCon
 // (2) only apply changes not already listed, (3) append a new
 // entry below describing what they changed.
 // ============================================================
-const SITE_VERSION = "2026-05-15.25";
+const SITE_VERSION = "2026-05-15.26";
 const SITE_CHANGELOG = [
   // newest first
+  { version: "2026-05-15.26", date: "2026-05-15", changes: [
+    "**Pantry: per-item freezer toggle (❄️).** Each pantry row gets a ❄️ button as a leading icon inside the Item cell — faint grey when inactive, full opacity when active. Click toggles. When active, the row's Freshness bar decays at the frozen-category rate (~5%/month) regardless of the row's actual category — useful for fresh items that have been bagged and frozen (a whole chicken, a tub of stock, leftover curry) that you don't want bleeding 10–20% confidence per day. The flag is independent of the row's `category` field, which keeps describing the item's nature ('protein', 'produce') rather than its current storage state.",
+    "**State + sync model.** App-level `inFreezer` Set mirrors `outOfStock`'s shape: a Set of item names, seeded from localStorage on first paint and replaced from Supabase once the pantry fetch lands (rows with `in_freezer=true` populate the Set). `toggleInFreezer` follows the same optimistic-write + rollback pattern as `toggleOutOfStock`, with one wrinkle: if Supabase rejects the PATCH because the `in_freezer` column doesn't exist yet (PostgREST error 42703 or message contains 'column'/'in_freezer'), it logs a warning and **keeps** the local state instead of rolling back. The dashboard works correctly today; once you run the migration cross-device sync starts working automatically. **Migration to run in the Supabase SQL Editor:** `ALTER TABLE pantry ADD COLUMN in_freezer boolean DEFAULT false;`",
+    "**Decay function: in_freezer override.** `decayed(item)` now checks `item._in_freezer` before falling through to `decayPerDay(item.category)`. When true, the rate is 5/30 (frozen rate). Honours the live `inFreezer` Set during render via the row decoration so toggling updates the Freshness bar immediately, not just after the Supabase round-trip lands. Side note: this also fixes a small subtle thing — items already categorised as 'frozen' continue to use the frozen rate via the category path; the new `_in_freezer` is purely additive.",
+    "**Browser tab title:** `<title>Larder — What's in your kitchen?</title>` → `<title>Larder</title>`. Cleaner in the tab strip; the descriptor was redundant with the wordmark visible on the page itself.",
+    "**Stats tab subtitle removed.** The descriptor 'Library health check — recipe coverage, allergen tagging, and audience breakdown by source.' is gone from the tab nav. Stats now sits in the nav with no subtitle below it — the section titles inside the tab (Workflow integrity, Recipe page-number coverage, Pantry composition & health, Audience breakdown across library) already say what's there. Also tightened the renderer so an empty-string subtitle stops emitting a blank `<div class=\"tab-subtitle\"/>` — only renders when there's actual text.",
+  ]},
   { version: "2026-05-15.25", date: "2026-05-15", changes: [
     "**Stats: 'Recipe page-number coverage' drilldown.** Each row in the per-book breakdown is now clickable — expands inline to show the recipes in that book that are missing a page number (alphabetised within the book). Each recipe row gets an inline `<input type=\"number\">` for the page; tab or Enter to save locally. Pending edits are tracked with a small ● next to the input and a `+N` chip on the book row header so you can see at a glance which books have unsaved work. Click the row header again (or another book's header) to collapse — only one book expands at a time to keep the section compact.",
     "**Why local-first, not direct write.** The `recipes` table on Supabase requires the service role to write (RLS — same posture as v14.5 set up). The page only carries the anon key, so a direct PATCH would 401, and embedding the service-role key client-side would grant anyone-with-the-page-source full write access to the household DB. So edits live in `localStorage` under `grocery-intelligence-v1:page-edits` (separate from the pantry blob — different lifecycle and a separate `clear` action). When you have pending edits, an amber banner sits above the breakdown with **Export updates** and **Discard** buttons. Export opens a modal with a generated `UPDATE recipes SET source_page = N WHERE id = '…';` line per pending edit — copyable in one click. Paste into the Supabase SQL Editor (or a Claude session) to apply, then hit **Mark as applied** in the modal to clear local state. KPI counts stay computed off canonical RECIPES, so the section keeps showing the real gap until you actually run the export and reload.",
@@ -919,10 +926,14 @@ function mapPantryRow(row) {
     purchased: row.purchased,
     expires: row.expires,
     allergen_flag: row.allergen_flag,
-    // out_of_stock and qty_adjustment now live on the row itself
-    // (not localStorage) — pass through so the UI can read them.
+    // out_of_stock, qty_adjustment, and in_freezer now live on the row
+    // itself (not localStorage) — pass through so the UI can read them.
+    // in_freezer is a manual override (the user dragged a fresh item into
+    // the freezer) — when true, freshness decay uses the frozen rate
+    // regardless of the row's category.
     _out_of_stock: !!row.out_of_stock,
     _qty_adjustment: row.qty_adjustment || 0,
+    _in_freezer: !!row.in_freezer,
   };
 }
 
@@ -1042,7 +1053,13 @@ function decayPerDay(category){
 }
 function decayed(item){
   const d = daysSince(item.purchased);
-  const v = (item.confidence ?? 90) - d * decayPerDay(item.category);
+  // _in_freezer is a manual override the user can set via the ❄️ toggle on
+  // the Pantry tab. When true, decay drops to the frozen-category rate
+  // (~5%/month) regardless of the item's stored category. Lets a fresh
+  // chicken that's been bagged and frozen stop bleeding 10% confidence per
+  // day without having to rewrite its category field.
+  const rate = item._in_freezer ? (5/30) : decayPerDay(item.category);
+  const v = (item.confidence ?? 90) - d * rate;
   return Math.max(0, Math.round(v));
 }
 function daysUntilExpiry(item){
@@ -1305,7 +1322,7 @@ function Section({title, subtitle, tone, children, collapsible=false, defaultOpe
 }
 
 // ===== Pantry view =====
-function PantryView({pantry, outOfStock, toggleOutOfStock, qtyAdjustments, adjustQty, syncErrors}){
+function PantryView({pantry, outOfStock, toggleOutOfStock, inFreezer, toggleInFreezer, qtyAdjustments, adjustQty, syncErrors}){
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState("all");
   // Category filter — composes (AND) with `filter` and the search box. "all" = no
@@ -1344,12 +1361,16 @@ function PantryView({pantry, outOfStock, toggleOutOfStock, qtyAdjustments, adjus
     </span>;
   };
   const rows = useMemo(()=> pantry.map(p => {
-    const conf = decayed(p);
+    // Honour the live inFreezer Set when computing decay so toggling the
+    // freezer flag updates the Freshness bar immediately, even before the
+    // Supabase round-trip has updated p._in_freezer on the pantry row.
+    const frozen = (inFreezer && inFreezer.has(p.item)) || p._in_freezer;
+    const conf = decayed({...p, _in_freezer: frozen});
     const dExp = daysUntilExpiry(p);
     const flag = p.allergen_flag || "household_safe";
     const delta = qtyAdjustments[p.item] || 0;
-    return {...p, _conf:conf, _dExp:dExp, _flag:flag, _out: outOfStock.has(p.item), _delta: delta, _syncErr: (syncErrors||{})[p.item] || null};
-  }), [pantry, outOfStock, qtyAdjustments, syncErrors]);
+    return {...p, _conf:conf, _dExp:dExp, _flag:flag, _out: outOfStock.has(p.item), _frozen: frozen, _delta: delta, _syncErr: (syncErrors||{})[p.item] || null};
+  }), [pantry, outOfStock, inFreezer, qtyAdjustments, syncErrors]);
   // Distinct categories present in current pantry, sorted alphabetically. Items
   // without a category are bucketed under "uncategorised" (sentinel value used by
   // both the dropdown options and the filter predicate below).
@@ -1482,7 +1503,15 @@ function PantryView({pantry, outOfStock, toggleOutOfStock, qtyAdjustments, adjus
       <div className="divide-y divide-stone-100">
         {filtered.map((r,i)=> (
           <div key={r.item+i} className={`grid grid-cols-12 gap-2 items-center px-4 py-2 text-sm ${r._out?"opacity-40 line-through":""}`}>
-            <div className="col-span-3 font-medium" title={r.purchased ? `bought ${formatDate(r.purchased)}` : ""}>{r.item}</div>
+            <div className="col-span-3 font-medium flex items-center gap-1.5" title={r.purchased ? `bought ${formatDate(r.purchased)}` : ""}>
+              <button
+                onClick={(e)=>{ e.stopPropagation(); toggleInFreezer(r.item); }}
+                className={`text-xs leading-none shrink-0 transition-opacity ${r._frozen ? "opacity-100" : "opacity-25 hover:opacity-60"}`}
+                title={r._frozen ? "In freezer — freshness decays slowly (~5%/month). Click to remove from freezer." : "Move to freezer — slows freshness decay to the frozen rate (~5%/month)."}
+                aria-label={r._frozen ? "Remove from freezer" : "Move to freezer"}
+              >❄️</button>
+              <span className="truncate">{r.item}</span>
+            </div>
             <div className="col-span-1 text-stone-500 text-xs truncate" title={r.category}>{r.category}</div>
             <div className="col-span-3 text-center mono text-xs flex items-center justify-center gap-1">
               <button onClick={()=>adjustQty(r.item, -1)} disabled={r._out} className="qty-btn" title="Decrement qty (used one)">−</button>
@@ -5346,6 +5375,12 @@ function App(){
   // +/- taps coalesce into a single network write.
   const [outOfStock, setOutOfStock] = useState(new Set(initialState?.outOfStock || []));
   const [qtyAdjustments, setQtyAdjustments] = useState(initialState?.qtyAdjustments || {});
+  // in_freezer is a manual override the user can flip per pantry item to swap
+  // its decay rate to the frozen-category rate. Mirrors outOfStock's shape: a
+  // Set of item names. Seeded from localStorage on first paint; replaced from
+  // Supabase once the pantry fetch lands (rows with in_freezer=true populate
+  // the Set in the boot effect below).
+  const [inFreezer, setInFreezer] = useState(new Set(initialState?.inFreezer || []));
   // Track per-item sync errors so the UI can surface a "not synced" hint.
   // Keyed by item name (matches outOfStock/qtyAdjustments shape).
   const [syncErrors, setSyncErrors] = useState({}); // {itemName: errorMessage}
@@ -5399,6 +5434,13 @@ function App(){
         const adj = {};
         for (const p of mappedPantry) if (p._qty_adjustment) adj[p.item] = p._qty_adjustment;
         setQtyAdjustments(adj);
+        // Same pattern for in_freezer: Set of item names where the row's
+        // in_freezer column is true. If the column doesn't exist yet in
+        // Supabase (the ALTER TABLE hasn't been run), every row's
+        // _in_freezer will be false and this Set stays empty — handlers
+        // below fall back to local-only state in that case.
+        const frz = new Set(mappedPantry.filter(p => p._in_freezer).map(p => p.item));
+        setInFreezer(frz);
 
         setRecipes(recipeRows.map(mapRecipeRow));
         setRecipesLoaded(true);
@@ -5472,7 +5514,7 @@ function App(){
     ["pantry","Pantry", "Everything currently in the kitchen, with expiry and confidence tracking. Mark items out of stock if you've used them up."],
     ["gaps","Basket", "Your next shop — likely gaps plus the leverage picks that unlock the most recipes. Items you buy regularly that are missing from both your latest order and the pantry are candidates for the basket."],
     ["tesco","Orders", "Past Tesco deliveries — spend trends, repeat purchases, substitutions, and Khalil allergen exposure. Read-only."],
-    ["audit","Stats", "Library health check — recipe coverage, allergen tagging, and audience breakdown by source."],
+    ["audit","Stats", ""],
   ];
 
   const currentTabMeta = tabs.find(t => t[0] === tab);
@@ -5635,6 +5677,55 @@ function App(){
         setItemSyncError(itemName, "Couldn't save — tap again to retry");
       });
   }, [outOfStock, findRowByItem, setItemSyncError]);
+
+  // Toggle the in_freezer flag for a pantry item. Same optimistic-write
+  // pattern as toggleOutOfStock, with one extra wrinkle: if Supabase rejects
+  // the PATCH because the in_freezer column doesn't exist yet (the
+  // ALTER TABLE hasn't been run), we keep the local state change instead of
+  // rolling it back — the dashboard still works correctly today, the user
+  // just won't get cross-device sync until they run the migration. The
+  // PostgREST error code for "undefined column" is 42703.
+  const toggleInFreezer = useCallback((itemName) => {
+    const row = findRowByItem(itemName);
+    const wasFrozen = inFreezer.has(itemName);
+    const newFrozen = !wasFrozen;
+    // 1. Optimistic local update on the Set
+    setInFreezer(prev => {
+      const next = new Set(prev);
+      if (newFrozen) next.add(itemName); else next.delete(itemName);
+      return next;
+    });
+    // Also reflect immediately on the pantry row so decayed() picks up the
+    // new rate this render — otherwise the Freshness bar wouldn't change
+    // until the Supabase PATCH round-trips back.
+    if (row) {
+      setPantry(prev => prev.map(p => p.id === row.id ? {...p, _in_freezer: newFrozen} : p));
+    }
+    setItemSyncError(itemName, null);
+    if (!row) return; // no row id → local-only, nothing to sync
+    // 2. Fire PATCH in background
+    patchPantryRow(row.id, { in_freezer: newFrozen })
+      .catch(err => {
+        const msg = String(err && err.message || err);
+        // Schema not migrated yet — keep local state, just log it. The page
+        // continues to work locally; cross-device sync waits on the ALTER.
+        if (msg.includes("in_freezer") || msg.includes("42703") || msg.toLowerCase().includes("column")) {
+          console.warn(`in_freezer column not yet in Supabase pantry table — keeping local state for "${itemName}". Run: ALTER TABLE pantry ADD COLUMN in_freezer boolean DEFAULT false;`);
+          return;
+        }
+        // Any other error: roll back the local change.
+        console.error(`Failed to sync in_freezer for "${itemName}":`, err);
+        setInFreezer(prev => {
+          const next = new Set(prev);
+          if (wasFrozen) next.add(itemName); else next.delete(itemName);
+          return next;
+        });
+        if (row) {
+          setPantry(prev => prev.map(p => p.id === row.id ? {...p, _in_freezer: wasFrozen} : p));
+        }
+        setItemSyncError(itemName, "Couldn't save — tap again to retry");
+      });
+  }, [inFreezer, findRowByItem, setItemSyncError]);
 
   // Debounced qty PATCH. Multiple rapid +/- taps coalesce into one network
   // call carrying the final value. Per-item timers so different items don't
@@ -5836,11 +5927,11 @@ function App(){
         </button>
       )}
     </div>
-    {currentTabMeta && <div className="tab-subtitle">{currentTabMeta[2]}</div>}
+    {currentTabMeta && currentTabMeta[2] && <div className="tab-subtitle">{currentTabMeta[2]}</div>}
 
     {tab==="planner" && <PlannerView pantry={pantry} outOfStock={outOfStock} cooked={cooked}/>}
     {tab==="recipes" && <RecipesView pantry={pantry} outOfStock={outOfStock} cooked={cooked} addCooked={addCooked} eaterFilter={eaterFilter} setEaterFilter={setEaterFilter} cookedSyncErrors={cookedSyncErrors}/>}
-    {tab==="pantry" && <PantryView pantry={pantry} outOfStock={outOfStock} toggleOutOfStock={toggleOutOfStock} qtyAdjustments={qtyAdjustments} adjustQty={adjustQty} syncErrors={syncErrors}/>}
+    {tab==="pantry" && <PantryView pantry={pantry} outOfStock={outOfStock} toggleOutOfStock={toggleOutOfStock} inFreezer={inFreezer} toggleInFreezer={toggleInFreezer} qtyAdjustments={qtyAdjustments} adjustQty={adjustQty} syncErrors={syncErrors}/>}
     {tab==="tesco" && <OrdersView pantry={pantry}/>}
     {tab==="gaps" && <GapsView pantry={pantry} outOfStock={outOfStock}/>}
     {tab==="audit" && <AuditView pantry={pantry} cooked={cooked} outOfStock={outOfStock}/>}
