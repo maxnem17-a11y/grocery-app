@@ -110,9 +110,12 @@ const { useState, useMemo, useEffect, useCallback, useRef, createContext, useCon
 // (2) only apply changes not already listed, (3) append a new
 // entry below describing what they changed.
 // ============================================================
-const SITE_VERSION = "2026-05-15.15";
+const SITE_VERSION = "2026-05-15.19";
 const SITE_CHANGELOG = [
   // newest first
+  { version: "2026-05-15.19", date: "2026-05-15", changes: [
+    "**Rotating kitchen-themed boot-fetch loading messages.** Replaced the single 'Loading pantry and recipes from Supabase…' string with a pool of 10 kitchen verbs (Turning on the hob…, Reading the recipe…, Stocking the pantry…, Warming the pan…, Chopping the onions…, Preheating the oven…, Sharpening the knives…, Setting the table…, Putting the kettle on…, Measuring the spices…). One is picked at random per page load via `useMemo(..., [])` — stable for the duration of a render, reshuffles on reload. The `LOADING_MESSAGES` const + `useMemo` sit alongside `nextDelivery` above all three early-returns (loading/loadError/no-data) to keep React hook order identical across every render path (same v8 lesson). Initial Supabase fetch only — subsequent data fetches (refreshReceipts, etc.) keep their own UX.",
+  ]},
   { version: "2026-05-15.15", date: "2026-05-15", changes: [
     "**Cook tab retro icon swapped chef's hat → saucepan.** Chef's hat silhouette wasn't reading clearly at 16px — too easily mistaken for a mushroom. Replaced with a side-view saucepan: three vertical steam wisps at top, cream rim ring, terracotta body, thin dark handle extending right. Reads as cooking immediately and ties the palette together via the cream rim (matches the jar's two-tone fill).",
   ]},
@@ -5288,10 +5291,32 @@ function App(){
   // every render path (loading → loadError → no-data → happy path).
   const nextDelivery = useMemo(() => suggestNextDelivery(receipts), [receipts]);
 
+  // Boot-fetch loading messages — picked once per page load (empty deps), so the
+  // copy is stable across re-renders inside a single loading screen but reshuffles
+  // on reload. Same hook-order rule as nextDelivery above: must sit above all
+  // early-returns. Only used by the initial Supabase fetch screen, not by any
+  // subsequent data fetches (refreshReceipts, etc.) which have their own UX.
+  const LOADING_MESSAGES = [
+    "Turning on the hob…",
+    "Reading the recipe…",
+    "Stocking the pantry…",
+    "Warming the pan…",
+    "Chopping the onions…",
+    "Preheating the oven…",
+    "Sharpening the knives…",
+    "Setting the table…",
+    "Putting the kettle on…",
+    "Measuring the spices…",
+  ];
+  const loadingMessage = useMemo(
+    () => LOADING_MESSAGES[Math.floor(Math.random() * LOADING_MESSAGES.length)],
+    []
+  );
+
   if (loading) {
     return <div className="max-w-7xl mx-auto px-4 sm:px-6 py-20 text-center">
       <div className="inline-block animate-spin rounded-full h-10 w-10 border-2 border-stone-300 border-t-stone-800 mb-4"></div>
-      <p className="text-stone-500 text-sm">Loading pantry and recipes from Supabase…</p>
+      <p className="text-stone-500 text-sm">{loadingMessage}</p>
     </div>;
   }
   if (loadError) {
