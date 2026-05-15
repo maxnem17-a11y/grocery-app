@@ -4189,7 +4189,16 @@ function GapCard({label, value, of, severity, note}){
 // Style toggle (modern/retro) controls both the in-page mark AND the
 // browser tab favicon. Choice persists via localStorage.
 // ============================================================================
-function LarderBrand({ pantry, nextDelivery }) {
+function LarderBrand({ pantry, receipts }) {
+  // Compute next delivery from receipts using the existing module-level helper.
+  // Lives here (not passed in) so the component stays self-contained — it can
+  // be dropped into any tree that has receipts in scope without coupling to
+  // PlannerView's internals.
+  const nextDelivery = useMemo(
+    () => suggestNextDelivery(receipts || []),
+    [receipts]
+  );
+
   // Load saved style on first render. Default to "modern" if nothing saved.
   const [style, setStyle] = useState(() => {
     try { return localStorage.getItem("larder-brand-style") || "modern"; }
@@ -4851,7 +4860,7 @@ function App(){
   <AllergensContext.Provider value={allergens}>
   <TescoSkusContext.Provider value={skuIndex}>
   <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-10">
-    <LarderBrand pantry={pantry} nextDelivery={nextDelivery} />
+    <LarderBrand pantry={pantry} receipts={receipts} />
     <header className="flex flex-wrap items-end justify-between gap-3 mb-4">
       <div>
         <h1 className="text-3xl font-semibold tracking-tight">Grocery intelligence</h1>
