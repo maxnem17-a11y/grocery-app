@@ -11,7 +11,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<title>Larder</title>
+<title>Larder — What's in your kitchen?</title>
   <link rel="manifest" href="manifest.json">
 <!-- Larder favicons — swapped at runtime by the brand-style toggle. -->
 <!-- The toggle script rewrites these hrefs when the user picks modern/retro, -->
@@ -93,7 +93,7 @@
   .legend-strip{ font-size:.7rem; color:#6b7280; }
   .legend-strip .lkey{ display:inline-flex; align-items:center; gap:.3rem; margin-right:.9rem; white-space:nowrap; }
   .legend-strip .lkey .sw{ width:8px; height:8px; border-radius:2px; display:inline-block; }
-  .tab-subtitle{ font-size:.75rem; color:#6b7280; margin-top:.5rem; margin-bottom:1.5rem; line-height:1.4; padding:0 .25rem; }
+  .tab-subtitle{ font-size:.75rem; color:#6b7280; margin-top:.5rem; margin-bottom:1rem; line-height:1.4; padding:0 .25rem; }
 </style>
 </head>
 <body>
@@ -110,9 +110,14 @@ const { useState, useMemo, useEffect, useCallback, useRef, createContext, useCon
 // (2) only apply changes not already listed, (3) append a new
 // entry below describing what they changed.
 // ============================================================
-const SITE_VERSION = "2026-05-15.4";
+const SITE_VERSION = "2026-05-15.5";
 const SITE_CHANGELOG = [
   // newest first
+  { version: "2026-05-15.5", date: "2026-05-15", changes: [
+    "**Tab icons (modern set).** Six monoline forest-green SVG icons rendered to the left of each tab label: planner (spiral notebook), recipes (open book), pantry (mini brand jar), gaps (basket + plus), Orders (parcel with tape cross), Stats (ascending bars). Icons are 16×16, stroke 1.4, `#1f4d2c` to match the brand palette. Sit inside the existing `.navtab` button via an inline-flex span with a 6px gap — no nav layout changes.",
+    "**Brand-style sync via window event.** The brand toggle in `LarderBrand` now dispatches a `larder-brand-style-change` CustomEvent whenever the user switches between modern and retro. A new `useBrandStyle()` hook subscribes to that event, so any component (currently `TabIcon`) can stay in sync with the brand without prop-drilling through `App`. Same localStorage key (`larder-brand-style`) is still the source of truth on initial render.",
+    "**Retro tab icons: placeholder, returns null.** The retro branch of `TabIcon` is stubbed pending the next round (16-bit pixel art matching the existing retro jar palette: `#b9c660` / `#f0743c` / `#3e200c` / `#fcf0c8`). Retro brand mode currently shows tab labels with no icon — intentional, will ship next.",
+  ]},
   { version: "2026-05-15.4", date: "2026-05-15", changes: [
     "**Dry-run now reports archive status upfront.** When .eml dry-run runs, the function does the `(retailer, order_number)` dedup lookup as part of the parse response — same lookup it would do on save, just done at preview time. Response shape extended: `{status: 'dry_run', retailer, order, exists, existing_id?, existing_delivery_date?, existing_email_type?}`. The dedup check is one cheap SELECT; user gets the answer to 'is this already in the archive?' immediately rather than having to click Save and read the duplicate banner.",
     "**Receipt preview: archive-status banner.** Above the KPI grid, the preview now shows one of: amber 'this will replace the previous version' (existing receipt + new amendment), emerald '✓ already in archive, nothing to do' (duplicate), or stone 'couldn't check archive status' (lookup failed). No banner for genuine new orders — the green Save button is the affirmative signal.",
@@ -3128,6 +3133,11 @@ function OrdersView(){
   const maxSection = Math.max(...stats.sectionTotals.map(([,v])=>v), 1);
 
   return <div className="space-y-5">
+    <div className="text-xs text-stone-600 bg-stone-50 border border-stone-200 rounded-lg px-3 py-2">
+      <strong>Order history.</strong> {orders.length} Tesco orders between {formatDate(orders[0].delivery_date)} and {formatDate(orders[orders.length-1].delivery_date)}.
+      Useful for spotting patterns, tracking Khalil's allergen exposure across past deliveries, and reviewing substitutions.
+      To add a new order, drop the receipt into the parser below and click <strong>Save to archive</strong>.
+    </div>
     <ReceiptParser/>
     <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
       <KV label="Orders" value={orders.length} sub={`${formatDate(orders[0].delivery_date)} → ${formatDate(orders[orders.length-1].delivery_date)}`}/>
@@ -4070,7 +4080,7 @@ function GapsView({pantry, outOfStock}){
 }
 
 // ===== Audit view =====
-function AuditView({pantry, recipesCount, expiringCount, cookedCount, orderCount, lastReceiptDate}){
+function AuditView({pantry}){
   const allergens = useContext(AllergensContext);
   const decorated = useMemo(()=> RECIPES.map(r=>{
     const f = flagsForRecipe(r, allergens);
@@ -4101,21 +4111,8 @@ function AuditView({pantry, recipesCount, expiringCount, cookedCount, orderCount
   });
 
   return <div className="space-y-5">
-    <div className="text-sm text-stone-600 bg-stone-50 border border-stone-200 rounded-lg px-3 py-2 flex flex-wrap items-center justify-between gap-2">
-      <p>
-        <span title="Total recipes across all sources">{recipesCount} recipes</span>
-        {" · "}
-        <span title="Items currently tracked in your pantry">{pantry.length} pantry items</span>
-        {" · "}
-        <span title="Pantry items expiring in 5 days or fewer">{expiringCount} expiring soon</span>
-        {" · "}
-        <span title="Recipes you've marked cooked in this browser">{cookedCount} cooked</span>
-        {" · "}
-        <span title="Tesco deliveries parsed from receipt emails">{orderCount} orders</span>
-      </p>
-      <span className="text-xs text-stone-500 mono">
-        {lastReceiptDate ? `last receipt: ${formatDate(lastReceiptDate)}` : "no receipts yet"}
-      </span>
+    <div className="text-xs text-stone-600 bg-stone-50 border border-stone-200 rounded-lg px-3 py-2">
+      <strong>Library health check.</strong> Quick stats about the recipe library and pantry coverage — useful for spotting gaps in the data (missing tags, untagged recipes, manifest mismatches) rather than gaps in your basket.
     </div>
     <Section title="Workflow integrity" subtitle="Health check — green means all good, amber means a small fix is needed" tone="ok"
       tip="Each card reports on one data-quality dimension: are all recipes tagged with an audience, are all pantry items tagged with an allergen flag, etc. Status chip on each card: ✓ OK = nothing to do, ⚠ Fix needed = small repair recommended, ⚠ Critical action needed = fix before relying on this data.">
@@ -4197,16 +4194,7 @@ function GapCard({label, value, of, severity, note}){
 // Style toggle (modern/retro) controls both the in-page mark AND the
 // browser tab favicon. Choice persists via localStorage.
 // ============================================================================
-function LarderBrand({ pantry, receipts, showHelpBanner, onShowHelp }) {
-  // Compute next delivery from receipts using the existing module-level helper.
-  // Lives here (not passed in) so the component stays self-contained — it can
-  // be dropped into any tree that has receipts in scope without coupling to
-  // PlannerView's internals.
-  const nextDelivery = useMemo(
-    () => suggestNextDelivery(receipts || []),
-    [receipts]
-  );
-
+function LarderBrand({ pantry, nextDelivery }) {
   // Load saved style on first render. Default to "modern" if nothing saved.
   const [style, setStyle] = useState(() => {
     try { return localStorage.getItem("larder-brand-style") || "modern"; }
@@ -4222,6 +4210,8 @@ function LarderBrand({ pantry, receipts, showHelpBanner, onShowHelp }) {
     if (t) t.href = `icons/larder-${style}-apple-touch.png`;
     if (i192) i192.href = `icons/larder-${style}-192.png`;
     if (i512) i512.href = `icons/larder-${style}-512.png`;
+    // Notify other components (e.g. TabIcon) that the brand style has changed.
+    try { window.dispatchEvent(new CustomEvent("larder-brand-style-change", { detail: style })); } catch {}
   }, [style]);
 
   // Weighted average confidence — fresh items count double.
@@ -4313,7 +4303,7 @@ function LarderBrand({ pantry, receipts, showHelpBanner, onShowHelp }) {
   else deliveryLine = "Delivery overdue";
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 mb-3 pb-4 border-b border-stone-200">
+    <div className="flex flex-wrap items-center justify-between gap-3 mb-6 pb-4 border-b border-stone-200">
       <div className="flex items-center gap-3">
         {style === "modern" ? renderModernJar() : renderRetroJar()}
         <div>
@@ -4332,10 +4322,6 @@ function LarderBrand({ pantry, receipts, showHelpBanner, onShowHelp }) {
                 className="pill" title="Clean forest-green jar">modern</button>
         <button onClick={() => setStyle("retro")} data-active={style === "retro"}
                 className="pill" title="16-bit pixel-art jar">retro</button>
-        {!showHelpBanner && onShowHelp && (
-          <button onClick={onShowHelp} className="pill ml-2"
-                  title="Reopen the introduction panel">? Help</button>
-        )}
       </div>
     </div>
   );
@@ -4346,13 +4332,105 @@ function LarderBrand({ pantry, receipts, showHelpBanner, onShowHelp }) {
 // ============================================================================
 function LarderFooter() {
   return (
-    <footer className="pb-6 text-center">
+    <footer className="mt-12 pt-8 pb-6 text-center border-t border-stone-200">
       <p className="text-stone-400 text-sm tracking-wide"
          style={{ fontFamily: "Georgia, 'Times New Roman', serif", fontStyle: "italic" }}>
         What's in your kitchen?
       </p>
     </footer>
   );
+}
+
+// ============================================================================
+// TabIcon — small monoline (modern) or pixel-art (retro) icon for each nav tab.
+// Subscribes to brand-style changes via window event so it stays in sync with
+// the LarderBrand toggle without prop-drilling.
+// ============================================================================
+function useBrandStyle() {
+  const [style, setStyle] = useState(() => {
+    try { return localStorage.getItem("larder-brand-style") || "modern"; }
+    catch { return "modern"; }
+  });
+  useEffect(() => {
+    const onChange = (e) => setStyle(e.detail || "modern");
+    window.addEventListener("larder-brand-style-change", onChange);
+    return () => window.removeEventListener("larder-brand-style-change", onChange);
+  }, []);
+  return style;
+}
+
+function TabIcon({ kind }) {
+  const style = useBrandStyle();
+  // Modern: monoline SVG, forest #1f4d2c, 16x16, stroke 1.4.
+  const modernCommon = {
+    width: 16, height: 16, viewBox: "0 0 16 16",
+    fill: "none", stroke: "#1f4d2c", strokeWidth: 1.4,
+    strokeLinecap: "round", strokeLinejoin: "round",
+    xmlns: "http://www.w3.org/2000/svg",
+    style: { flexShrink: 0, display: "block" },
+    "aria-hidden": "true",
+  };
+  if (style === "modern") {
+    switch (kind) {
+      case "planner": // spiral notebook with three list lines
+        return (
+          <svg {...modernCommon}>
+            <rect x="3.5" y="2.5" width="9" height="11" rx="0.8"/>
+            <line x1="3.5" y1="5" x2="2" y2="5"/>
+            <line x1="3.5" y1="8" x2="2" y2="8"/>
+            <line x1="3.5" y1="11" x2="2" y2="11"/>
+            <line x1="6" y1="6" x2="11" y2="6"/>
+            <line x1="6" y1="8.5" x2="11" y2="8.5"/>
+            <line x1="6" y1="11" x2="9" y2="11"/>
+          </svg>
+        );
+      case "recipes": // open book with centre spine
+        return (
+          <svg {...modernCommon}>
+            <path d="M 8 4.5 C 6 3.2 4 3 2.2 3.2 L 2.2 12.5 C 4 12.3 6 12.5 8 13.8"/>
+            <path d="M 8 4.5 C 10 3.2 12 3 13.8 3.2 L 13.8 12.5 C 12 12.3 10 12.5 8 13.8"/>
+            <line x1="8" y1="4.5" x2="8" y2="13.8"/>
+          </svg>
+        );
+      case "pantry": // mini brand jar
+        return (
+          <svg {...modernCommon}>
+            <rect x="5" y="2.5" width="6" height="1.8" rx="0.4" fill="#1f4d2c"/>
+            <path d="M 3.8 5.5 Q 3.8 4.6 4.7 4.6 L 11.3 4.6 Q 12.2 4.6 12.2 5.5 L 12.2 12.5 Q 12.2 13.4 11.3 13.4 L 4.7 13.4 Q 3.8 13.4 3.8 12.5 Z"/>
+            <path d="M 3.8 10 L 12.2 10 L 12.2 12.5 Q 12.2 13.4 11.3 13.4 L 4.7 13.4 Q 3.8 13.4 3.8 12.5 Z" fill="#1f4d2c" stroke="none"/>
+          </svg>
+        );
+      case "gaps": // basket with plus
+        return (
+          <svg {...modernCommon}>
+            <path d="M 2.5 7 L 13.5 7 L 12 13 Q 11.8 13.5 11.2 13.5 L 4.8 13.5 Q 4.2 13.5 4 13 Z"/>
+            <path d="M 5 7 L 6.5 4 M 11 7 L 9.5 4"/>
+            <line x1="10.5" y1="2.5" x2="13.5" y2="2.5"/>
+            <line x1="12" y1="1" x2="12" y2="4"/>
+          </svg>
+        );
+      case "tesco": // parcel box with tape cross
+        return (
+          <svg {...modernCommon}>
+            <rect x="2.5" y="4.5" width="11" height="9" rx="0.5"/>
+            <line x1="2.5" y1="7.5" x2="13.5" y2="7.5"/>
+            <line x1="8" y1="4.5" x2="8" y2="13.5"/>
+            <path d="M 5.5 4.5 L 8 2.5 L 10.5 4.5"/>
+          </svg>
+        );
+      case "audit": // three ascending bars
+        return (
+          <svg {...modernCommon}>
+            <rect x="3" y="9.5" width="2.5" height="4" rx="0.3" fill="#1f4d2c" stroke="none"/>
+            <rect x="6.75" y="6.5" width="2.5" height="7" rx="0.3" fill="#1f4d2c" stroke="none"/>
+            <rect x="10.5" y="3.5" width="2.5" height="10" rx="0.3" fill="#1f4d2c" stroke="none"/>
+          </svg>
+        );
+      default: return null;
+    }
+  }
+  // Retro: pixel art — placeholder (will be shipped next round).
+  return null;
 }
 
 // ===== Root =====
@@ -4872,9 +4950,27 @@ function App(){
   <AllergensContext.Provider value={allergens}>
   <TescoSkusContext.Provider value={skuIndex}>
   <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-10">
-    <LarderBrand pantry={pantry} receipts={receipts}
-                 showHelpBanner={showHelpBanner}
-                 onShowHelp={()=>setShowHelpBanner(true)} />
+    <LarderBrand pantry={pantry} nextDelivery={nextDelivery} />
+    <header className="flex flex-wrap items-end justify-between gap-3 mb-4">
+      <div>
+        <h1 className="text-3xl font-semibold tracking-tight">Grocery intelligence</h1>
+        <p className="text-stone-500 text-sm mt-1">
+          <span title="Total recipes across all sources">{RECIPES.length} recipes</span>
+          {" · "}
+          <span title="Items currently tracked in your pantry">{pantry.length} pantry items</span>
+          {" · "}
+          <span title="Pantry items expiring in 5 days or fewer">{expiringCount} expiring soon</span>
+          {" · "}
+          <span title="Recipes you've marked cooked in this browser">{cooked.length} cooked</span>
+          {" · "}
+          <span title="Tesco deliveries parsed from receipt emails">{orderCount} orders</span>
+        </p>
+      </div>
+      <div className="text-xs text-stone-500 mono flex flex-col items-end gap-1">
+        <span>{lastReceiptDate ? `last receipt: ${formatDate(lastReceiptDate)}` : "no receipts yet"}</span>
+        {!showHelpBanner && <button onClick={()=>setShowHelpBanner(true)} className="pill" title="Reopen the introduction panel">? Help</button>}
+      </div>
+    </header>
 
     {showHelpBanner && <HelpBanner onDismiss={dismissHelpBanner}/>}
 
@@ -4886,7 +4982,10 @@ function App(){
     <div className="flex flex-wrap gap-0 mb-1 border-b border-stone-200">
       {tabs.map(([k,l])=>
         <button key={k} data-active={tab===k} onClick={()=>setTab(k)} className="navtab">
-          {l}
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <TabIcon kind={k}/>
+            {l}
+          </span>
         </button>
       )}
     </div>
@@ -4897,12 +4996,7 @@ function App(){
     {tab==="pantry" && <PantryView pantry={pantry} outOfStock={outOfStock} toggleOutOfStock={toggleOutOfStock} qtyAdjustments={qtyAdjustments} adjustQty={adjustQty} syncErrors={syncErrors}/>}
     {tab==="tesco" && <OrdersView/>}
     {tab==="gaps" && <GapsView pantry={pantry} outOfStock={outOfStock}/>}
-    {tab==="audit" && <AuditView pantry={pantry}
-                                  recipesCount={RECIPES.length}
-                                  expiringCount={expiringCount}
-                                  cookedCount={cooked.length}
-                                  orderCount={orderCount}
-                                  lastReceiptDate={lastReceiptDate}/>}
+    {tab==="audit" && <AuditView pantry={pantry}/>}
 
     <footer className="text-xs text-stone-400 mt-8 text-center space-y-1">
       <div>Synced to Supabase{STORAGE_OK ? " ✓" : " ✗"} across devices</div>
