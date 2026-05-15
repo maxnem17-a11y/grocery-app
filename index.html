@@ -110,9 +110,14 @@ const { useState, useMemo, useEffect, useCallback, useRef, createContext, useCon
 // (2) only apply changes not already listed, (3) append a new
 // entry below describing what they changed.
 // ============================================================
-const SITE_VERSION = "2026-05-15.10";
+const SITE_VERSION = "2026-05-15.11";
 const SITE_CHANGELOG = [
   // newest first
+  { version: "2026-05-15.11", date: "2026-05-15", changes: [
+    "**Suggested next basket moved from Cook to Basket (formerly Gaps).** Extracted the basket logic (priceIndex / gapAnalysis / nextDelivery memos, basket useMemo, openedSkus state, openableItems / blockedItems / openNext / resetOpened / buildBasketPayload / downloadBasketJson / copyBasketJson handlers, plus the UI Section — ~230 lines of logic + 171 lines of JSX) into a standalone `<SuggestedBasket pantry outOfStock/>` component sitting above PlannerView. The Basket view renders `<SuggestedBasket>` at the top of its main return; PlannerView (Cook) no longer carries any basket code. SuggestedBasket recomputes its own matchSet/decorated/leverage useMemos for self-containment — duplicates the work PlannerView still does, but the cost is trivial and the boundary is clean.",
+    "**Tab label 'Gaps' renamed to 'Basket'.** Internal key stays `gaps` so deep links and tab state survive. Subtitle copy updated alongside.",
+    "**Hook-ordering rule (from v8 lesson) re-applied.** All useContext / useState / useMemo calls inside SuggestedBasket sit at the top of the component body, before any conditional logic. The basket-empty case is handled inside the JSX (`{basket.items.length > 0 && <Section ...>}`), not via an early return — so hook order stays stable across renders regardless of state.",
+  ]},
   { version: "2026-05-15.10", date: "2026-05-15", changes: [
     "**Planner tab renamed to Cook.** Label only — the underlying tab key (`planner`), the view component (`PlannerView`), and the subtitle copy are unchanged. The subtitle already started with 'What to cook this week…' so it reads naturally with the new name.",
     "**Cook tab: 'Unlock the most recipes' section deleted.** The same content already lives on the Gaps tab as 'Ingredients that unlock the most recipes' — no point showing it twice. The `leverage` useMemo in PlannerView stays (the basket suggestion still consumes it), only the visible Section is gone.",
@@ -1171,11 +1176,11 @@ function HelpBanner({ onDismiss }){
           Your edits (out-of-stock toggles, cooked log, qty adjustments) sync to Supabase automatically and persist across devices. Receipt parsing and bulk recipe updates still happen via Claude.
         </p>
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-1.5 mt-3 text-xs text-stone-700">
-          <div><strong>Planner</strong> — what to cook this week, grouped by need.</div>
+          <div><strong>Cook</strong> — what to cook this week, grouped by need.</div>
           <div><strong>Recipes</strong> — search/filter the full library.</div>
           <div><strong>Pantry</strong> — current stock + expiry + confidence.</div>
           <div><strong>Orders</strong> — Tesco delivery history (read-only).</div>
-          <div><strong>Gaps</strong> — what regulars are missing from the pantry.</div>
+          <div><strong>Basket</strong> — your next shop: likely gaps + leverage picks.</div>
           <div><strong>Stats</strong> — library coverage + allergen audit.</div>
         </div>
       </div>
@@ -1609,43 +1614,33 @@ function EaterTile({name, status, reasons, uncertain}){
   </div>;
 }
 
-// ===== Planner view =====
-function PlannerView({pantry, outOfStock, cooked}){
-  // Receipts come from ReceiptsContext (commit 14.4) — the price index,
-  // cadence estimate, and gap analysis all read from this. Defaults to []
-  // so the helpers degrade gracefully before the boot fetch completes.
+// ===== Suggested next basket view =====
+// Extracted from PlannerView in v2026-05-15.11. Self-contained: pulls its
+// own contexts (receipts, allergens, skuIndex) and recomputes its own
+// matchSet/decorated/leverage useMemos rather than receiving them as props.
+// Duplicates a few useMemos that PlannerView also computes — fine, the cost
+// is trivial and keeping the component boundary clean is worth more than
+// the saving. Hook-ordering rule (v8 lesson): all hooks at the top, before
+// any conditional rendering. The empty-basket case is handled inside the
+// JSX (basket.items.length > 0 ? ... : null), not via early return.
+function SuggestedBasket({pantry, outOfStock}){
   const receipts = useContext(ReceiptsContext);
-  // Allergens come from AllergensContext (commit 14.5). Required to flag
-  // recipes against household dietary rules; before the boot fetch lands
-  // everything reads as Khalil-safe, then re-renders on update.
   const allergens = useContext(AllergensContext);
-  // Tesco SKU index comes from TescoSkusContext (commit B / Step 2 of basket
-  // automation). Used to attach tesco_sku / tesco_url / khalil_critical /
-  // household_rule_excluded to each basket item, and to filter out SKU-level
-  // household-rule exclusions via neverRestockReason(). Empty Map until the
-  // boot fetch lands; items will surface with needs_sku_lookup=true and
-  // skuRow=null in that window, which is non-blocking — downstream steps
-  // can flag them rather than crash.
   const skuIndex = useContext(TescoSkusContext);
+
+  // Recipe decoration: needed because leverage scoring runs over decorated
+  // recipes, and leverage is one of the three basket inputs.
   const matchSet = useMemo(()=> pantryMatchSet(pantry, outOfStock), [pantry, outOfStock]);
   const decorated = useMemo(()=> RECIPES.map(r=>{
     const m = makeability(r, matchSet);
     const f = flagsForRecipe(r, allergens);
     return {...r, _make:m, _flags:f, _audience: r.audience || audienceFromFlags(f)};
   }), [matchSet, allergens]);
-
-  const wholeHousehold = decorated.filter(r=>r._audience==="whole-household").sort((a,b)=>b._make.pct-a._make.pct).slice(0,6);
-  const highProteinAdult = decorated.filter(r=> r._flags.max!=="blocked" && (r.protein_per_serving_g||0)>=30).sort((a,b)=>(b.protein_per_serving_g||0)-(a.protein_per_serving_g||0)).slice(0,6);
-  const quickMakeable = decorated.filter(r=> ((r.prep_time_mins||0)+(r.cook_time_mins||0))<=25 && r._make.pct>=50).sort((a,b)=>b._make.pct-a._make.pct).slice(0,6);
-
-  const expiring = pantry.filter(p=>!outOfStock.has(p.item)).map(p=>({...p, _dExp:daysUntilExpiry(p)})).filter(p=>p._dExp!==null && p._dExp<=5).sort((a,b)=>a._dExp-b._dExp);
-  const expiringNames = new Set(expiring.map(e=>lc(e.item)));
-  const usesExpiring = decorated.filter(r=>{
-    return (r.ingredients||[]).some(i=> expiringNames.has(lc(i.pantry_match||"")));
-  }).sort((a,b)=>b._make.pct-a._make.pct).slice(0,6);
   const leverage = useMemo(()=> leverageScore(decorated, matchSet, 12), [decorated, matchSet]);
 
-  // ===== Suggested next basket =====
+  // Expiring set (basket input #1).
+  const expiring = pantry.filter(p=>!outOfStock.has(p.item)).map(p=>({...p, _dExp:daysUntilExpiry(p)})).filter(p=>p._dExp!==null && p._dExp<=5).sort((a,b)=>a._dExp-b._dExp);
+
   const priceIndex = useMemo(()=> buildPriceIndex(receipts), [receipts]);
   const gapAnalysis = useMemo(()=> computeRegularsAndGaps(pantry, receipts, allergens, 3, skuIndex), [pantry, receipts, allergens, skuIndex]);
   const nextDelivery = useMemo(()=> suggestNextDelivery(receipts), [receipts]);
@@ -1876,19 +1871,8 @@ function PlannerView({pantry, outOfStock, cooked}){
     }
   };
 
-  return <div className="space-y-6">
-    {expiring.length>0 && <Section title="Use these first — expiring ≤5 days" tone="warn" collapsible defaultOpen={false}
-      tip="Pantry items estimated to expire within 5 days, sorted by urgency. The recipes below are ones that use at least one of these items.">
-      <div className="flex flex-wrap gap-2">
-        {expiring.map((e,i)=> <Chip key={i} tone={e._dExp<=2?"danger":"warn"} title={e.expires ? `expires ${formatDate(e.expires)}` : ""}>{e.item} · {e._dExp}d</Chip>)}
-      </div>
-      {usesExpiring.length>0 && <>
-        <div className="text-xs text-stone-500 mt-3 mb-2 uppercase tracking-wider">Recipes that use these expiring items</div>
-        <RecipeMicroList items={usesExpiring}/>
-      </>}
-    </Section>}
-
-    {basket.items.length > 0 && <Section title={`Suggested next basket · ${basket.items.length} items`}
+  return basket.items.length > 0 ? (
+    <Section title={`Suggested next basket · ${basket.items.length} items`}
       subtitle={basket.priced > 0
         ? `${basket.counts.expiring} expiring · ${basket.counts.gap} gaps · ${basket.counts.leverage} leverage · est. ~£${basket.total.toFixed(2)}${basket.unpriced>0?` (${basket.unpriced} unpriced)`:""}`
         : "Prices not available — no matches in order history"}
@@ -2058,8 +2042,56 @@ function PlannerView({pantry, outOfStock, cooked}){
       <div className="text-xs text-stone-500 mt-3 leading-relaxed">
         Quantities and pack sizes are based on what you typically order for this product. Prices are medians from your past Tesco orders and may not reflect current Tesco pricing. Fuzzy matches are marked with <span className="mono">~</span> and shown in lighter text. Unpriced items (<span className="mono">—</span>) had no match in order history. Item names with a dotted underline (<span className="mono">🔎</span>) link to a Tesco search rather than a direct product page — these don't have a seeded SKU yet, so pick the right product manually. Suggested delivery is calculated from your past order cadence.
       </div>
-    </Section>}
+    </Section>
+  ) : null;
+}
 
+// ===== Planner view =====
+function PlannerView({pantry, outOfStock, cooked}){
+  // Receipts come from ReceiptsContext (commit 14.4) — the price index,
+  // cadence estimate, and gap analysis all read from this. Defaults to []
+  // so the helpers degrade gracefully before the boot fetch completes.
+  const receipts = useContext(ReceiptsContext);
+  // Allergens come from AllergensContext (commit 14.5). Required to flag
+  // recipes against household dietary rules; before the boot fetch lands
+  // everything reads as Khalil-safe, then re-renders on update.
+  const allergens = useContext(AllergensContext);
+  // Tesco SKU index comes from TescoSkusContext (commit B / Step 2 of basket
+  // automation). Used to attach tesco_sku / tesco_url / khalil_critical /
+  // household_rule_excluded to each basket item, and to filter out SKU-level
+  // household-rule exclusions via neverRestockReason(). Empty Map until the
+  // boot fetch lands; items will surface with needs_sku_lookup=true and
+  // skuRow=null in that window, which is non-blocking — downstream steps
+  // can flag them rather than crash.
+  const skuIndex = useContext(TescoSkusContext);
+  const matchSet = useMemo(()=> pantryMatchSet(pantry, outOfStock), [pantry, outOfStock]);
+  const decorated = useMemo(()=> RECIPES.map(r=>{
+    const m = makeability(r, matchSet);
+    const f = flagsForRecipe(r, allergens);
+    return {...r, _make:m, _flags:f, _audience: r.audience || audienceFromFlags(f)};
+  }), [matchSet, allergens]);
+
+  const wholeHousehold = decorated.filter(r=>r._audience==="whole-household").sort((a,b)=>b._make.pct-a._make.pct).slice(0,6);
+  const highProteinAdult = decorated.filter(r=> r._flags.max!=="blocked" && (r.protein_per_serving_g||0)>=30).sort((a,b)=>(b.protein_per_serving_g||0)-(a.protein_per_serving_g||0)).slice(0,6);
+  const quickMakeable = decorated.filter(r=> ((r.prep_time_mins||0)+(r.cook_time_mins||0))<=25 && r._make.pct>=50).sort((a,b)=>b._make.pct-a._make.pct).slice(0,6);
+
+  const expiring = pantry.filter(p=>!outOfStock.has(p.item)).map(p=>({...p, _dExp:daysUntilExpiry(p)})).filter(p=>p._dExp!==null && p._dExp<=5).sort((a,b)=>a._dExp-b._dExp);
+  const expiringNames = new Set(expiring.map(e=>lc(e.item)));
+  const usesExpiring = decorated.filter(r=>{
+    return (r.ingredients||[]).some(i=> expiringNames.has(lc(i.pantry_match||"")));
+  }).sort((a,b)=>b._make.pct-a._make.pct).slice(0,6);
+
+  return <div className="space-y-6">
+    {expiring.length>0 && <Section title="Use these first — expiring ≤5 days" tone="warn" collapsible defaultOpen={false}
+      tip="Pantry items estimated to expire within 5 days, sorted by urgency. The recipes below are ones that use at least one of these items.">
+      <div className="flex flex-wrap gap-2">
+        {expiring.map((e,i)=> <Chip key={i} tone={e._dExp<=2?"danger":"warn"} title={e.expires ? `expires ${formatDate(e.expires)}` : ""}>{e.item} · {e._dExp}d</Chip>)}
+      </div>
+      {usesExpiring.length>0 && <>
+        <div className="text-xs text-stone-500 mt-3 mb-2 uppercase tracking-wider">Recipes that use these expiring items</div>
+        <RecipeMicroList items={usesExpiring}/>
+      </>}
+    </Section>}
     <Section title={`Whole-household picks · ${wholeHousehold.length}`} tone="ok" subtitle="Top 6 by makeability — recipes you mostly already have ingredients for" collapsible defaultOpen={false}
       tip="Recipes safe for everyone (Max, Emily, and Khalil), ranked by how much of the ingredient list you already have in the pantry.">
       <RecipeMicroList items={wholeHousehold}/>
@@ -3965,6 +3997,7 @@ function GapsView({pantry, outOfStock}){
   }, [visibleRaw, regSortBy, regSortDir]);
 
   return <div className="space-y-5">
+    <SuggestedBasket pantry={pantry} outOfStock={outOfStock}/>
     <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
       <Stat label="Orders tracked" value={analysis.orderCount}
         tip="Number of Tesco orders parsed from receipts. The more orders, the more reliable the 'regulars' detection."/>
@@ -4665,7 +4698,7 @@ function App(){
     ["planner","Cook", "What to cook this week, grouped by what's expiring, what's whole-household-safe, and what's high-protein."],
     ["recipes","Recipes", "Search and filter every recipe in your library. Sort by makeability, protein, or prep time."],
     ["pantry","Pantry", "Everything currently in the kitchen, with expiry and confidence tracking. Mark items out of stock if you've used them up."],
-    ["gaps","Gaps", "Items you buy regularly that are missing from both your latest order and the pantry — candidates for the next basket."],
+    ["gaps","Basket", "Your next shop — likely gaps plus the leverage picks that unlock the most recipes. Items you buy regularly that are missing from both your latest order and the pantry are candidates for the basket."],
     ["tesco","Orders", "Past Tesco deliveries — spend trends, repeat purchases, substitutions, and Khalil allergen exposure. Read-only."],
     ["audit","Stats", "Library health check — recipe coverage, allergen tagging, and audience breakdown by source."],
   ];
