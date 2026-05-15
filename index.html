@@ -110,9 +110,13 @@ const { useState, useMemo, useEffect, useCallback, useRef, createContext, useCon
 // (2) only apply changes not already listed, (3) append a new
 // entry below describing what they changed.
 // ============================================================
-const SITE_VERSION = "2026-05-15.19";
+const SITE_VERSION = "2026-05-15.20";
 const SITE_CHANGELOG = [
   // newest first
+  { version: "2026-05-15.20", date: "2026-05-15", changes: [
+    "**Pantry tab: category filter dropdown.** New `<select>` styled as a pill sits inside the existing filter row (right of the All/Expiring/Low/Khalil/Out buttons), composing with them and the text search via AND. Options are sourced live from `[...new Set(pantry.map(p=>p.category))].sort()` — no hardcoded taxonomy, so new categories appear automatically as receipts add items. Each option shows the count for that category. Items missing a `category` field bucket under 'uncategorised'. Selecting a non-`all` value lights the pill (same `data-active` pattern as the buttons).",
+    "**Stats tab: 'Pantry composition & health' Section.** New section between Workflow integrity and Audience breakdown. Three KPI stats at the top (Categories tracked / In-stock items / Categories <50% avg confidence), then two row-bar tables. (1) Composition: each category's item count, share of in-stock pantry, and a stone-grey bar — sorted by count descending. (2) Confidence health: each category's avg confidence (decay-aware, uses `Bar`'s standard green/amber/red thresholds) and count of items expiring in ≤5 days (amber-bold when >0). Out-of-stock items excluded from all metrics — they're not really in the pantry until restored, so including them would mask which categories are at risk.",
+  ]},
   { version: "2026-05-15.19", date: "2026-05-15", changes: [
     "**Rotating kitchen-themed boot-fetch loading messages.** Replaced the single 'Loading pantry and recipes from Supabase…' string with a pool of 10 kitchen verbs (Turning on the hob…, Reading the recipe…, Stocking the pantry…, Warming the pan…, Chopping the onions…, Preheating the oven…, Sharpening the knives…, Setting the table…, Putting the kettle on…, Measuring the spices…). One is picked at random per page load via `useMemo(..., [])` — stable for the duration of a render, reshuffles on reload. The `LOADING_MESSAGES` const + `useMemo` sit alongside `nextDelivery` above all three early-returns (loading/loadError/no-data) to keep React hook order identical across every render path (same v8 lesson). Initial Supabase fetch only — subsequent data fetches (refreshReceipts, etc.) keep their own UX.",
   ]},
@@ -1277,6 +1281,10 @@ function Section({title, subtitle, tone, children, collapsible=false, defaultOpe
 function PantryView({pantry, outOfStock, toggleOutOfStock, qtyAdjustments, adjustQty, syncErrors}){
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState("all");
+  // Category filter — composes (AND) with `filter` and the search box. "all" = no
+  // category constraint. List is sourced from the live pantry below (not a fixed
+  // taxonomy), so it stays in sync as new categories appear via receipt parsing.
+  const [categoryFilter, setCategoryFilter] = useState("all");
   // Khalil-allergen audit panel: expands inline below the KPI row when the user clicks
   // the Khalil-allergen Stat card. Same content that used to live on the Stats tab —
   // moved here because the audit is operationally part of the pantry, not the library.
@@ -1315,8 +1323,20 @@ function PantryView({pantry, outOfStock, toggleOutOfStock, qtyAdjustments, adjus
     const delta = qtyAdjustments[p.item] || 0;
     return {...p, _conf:conf, _dExp:dExp, _flag:flag, _out: outOfStock.has(p.item), _delta: delta, _syncErr: (syncErrors||{})[p.item] || null};
   }), [pantry, outOfStock, qtyAdjustments, syncErrors]);
+  // Distinct categories present in current pantry, sorted alphabetically. Items
+  // without a category are bucketed under "uncategorised" (sentinel value used by
+  // both the dropdown options and the filter predicate below).
+  const categories = useMemo(() => {
+    const set = new Set();
+    pantry.forEach(p => set.add(p.category && p.category.trim() ? p.category : "uncategorised"));
+    return [...set].sort();
+  }, [pantry]);
   const filteredRaw = rows.filter(r => {
     if (q && !lc(r.item).includes(lc(q))) return false;
+    if (categoryFilter !== "all") {
+      const rowCat = (r.category && r.category.trim()) ? r.category : "uncategorised";
+      if (rowCat !== categoryFilter) return false;
+    }
     if (filter==="expiring") return r._dExp!==null && r._dExp <= 5 && !r._out;
     if (filter==="low") return r._conf < 30 && !r._out;
     if (filter==="son") return r._flag !== "household_safe";
@@ -1399,10 +1419,23 @@ function PantryView({pantry, outOfStock, toggleOutOfStock, qtyAdjustments, adjus
     </div>}
     <div className="flex flex-wrap gap-2 items-center mb-3">
       <input className="border border-stone-300 rounded-lg px-3 py-1.5 text-sm flex-1 min-w-[160px]" placeholder="Search pantry by item name…" value={q} onChange={e=>setQ(e.target.value)} />
-      <div className="flex flex-wrap gap-1">
+      <div className="flex flex-wrap gap-1 items-center">
         {[["all","All"],["expiring","Expiring ≤5d"],["low","Low confidence"],["son","Khalil allergens"],["out","Marked out"]].map(([k,l])=>
           <button key={k} data-active={filter===k} onClick={()=>setFilter(k)} className="pill">{l}</button>
         )}
+        <select
+          value={categoryFilter}
+          onChange={e=>setCategoryFilter(e.target.value)}
+          data-active={categoryFilter !== "all"}
+          className="pill cursor-pointer"
+          title="Filter pantry by category (composes with other filters and the search box)"
+          aria-label="Filter by category">
+          <option value="all">All categories</option>
+          {categories.map(c => {
+            const count = rows.filter(r => ((r.category && r.category.trim()) ? r.category : "uncategorised") === c).length;
+            return <option key={c} value={c}>{c} ({count})</option>;
+          })}
+        </select>
       </div>
     </div>
     <div className="card overflow-hidden">
@@ -4187,6 +4220,40 @@ function AuditView({pantry, cooked, outOfStock}){
       adults: list.filter(r=>r._audience==="adults-only").length,
     };
   });
+  // Pantry composition + confidence health by category. Combines task 2A (counts
+  // and share-of-pantry) with task 2B (avg confidence and expiring-soon count) in
+  // one rollup. Items without a category are bucketed under "uncategorised" so the
+  // total always reconciles with pantry.length. Items currently marked
+  // out-of-stock are excluded from all four metrics — they're not really "in" the
+  // pantry until restored.
+  const byCategory = useMemo(() => {
+    const inStock = pantry.filter(p => !oosSet.has(p.item));
+    const groups = new Map();
+    inStock.forEach(p => {
+      const cat = (p.category && p.category.trim()) ? p.category : "uncategorised";
+      if (!groups.has(cat)) groups.set(cat, []);
+      groups.get(cat).push(p);
+    });
+    const total = inStock.length || 1;
+    return [...groups.entries()]
+      .map(([cat, items]) => {
+        const confSum = items.reduce((s, p) => s + decayed(p), 0);
+        const avgConf = Math.round(confSum / items.length);
+        const expiring = items.filter(p => {
+          const d = daysUntilExpiry(p);
+          return d !== null && d <= 5;
+        }).length;
+        return {
+          category: cat,
+          count: items.length,
+          sharePct: Math.round(100 * items.length / total),
+          avgConf,
+          expiring,
+        };
+      })
+      .sort((a, b) => b.count - a.count); // largest categories first
+  }, [pantry, oosSet]);
+  const totalInStock = pantry.filter(p => !oosSet.has(p.item)).length;
 
   return <div className="space-y-5">
     <div className="text-stone-600 text-sm border border-stone-200 rounded-lg px-4 py-3 flex flex-wrap items-baseline justify-between gap-3">
@@ -4218,6 +4285,50 @@ function AuditView({pantry, cooked, outOfStock}){
                  note="east-curries (8), east-rice-tofu-pulses (18), east-condiments-sweet (6) now report accurate counts."/>
         <GapCard label="Order archive" value="See Orders tab" of="—" severity="low"
                  note="Spend trends, item frequency, allergen exposure, substitutions and unavailable items — all from the embedded Tesco order archive."/>
+      </div>
+    </Section>
+
+    <Section title="Pantry composition & health"
+      subtitle="By category — what's in the kitchen and which categories are at risk"
+      tip="Two views in one section: (1) how the in-stock pantry breaks down by category — count, share of total, and an at-a-glance bar; (2) the average confidence score per category plus how many items in each are expiring in ≤5 days. Out-of-stock items are excluded throughout — they're not really in the pantry until restored. Confidence decays automatically by category type, so this rolls up that decay so you can see at a glance which categories are quietly rotting (e.g. produce at 35% avg vs. dry-goods at 92%).">
+      <div className="grid sm:grid-cols-3 gap-3 mb-4">
+        <Stat label="Categories tracked" value={byCategory.length}
+          tip="Distinct category values currently in the in-stock pantry. Items without a category are bucketed under 'uncategorised'."/>
+        <Stat label="In-stock items" value={totalInStock}
+          tip="Pantry items not marked out-of-stock. This is the denominator for the share-of-pantry percentages below."/>
+        <Stat label="Categories <50% avg" value={byCategory.filter(c=>c.avgConf<50).length}
+          tone={byCategory.filter(c=>c.avgConf<50).length>0?"warn":"ok"}
+          tipAlign="right"
+          tip="Categories whose average confidence has dropped below 50%. Usually means a fresh-produce or dairy category that's been sitting a while — worth checking in person or buying fresh."/>
+      </div>
+      <div className="text-xs text-stone-500 mb-2 uppercase tracking-wider">Composition (by item count)</div>
+      <div className="space-y-1 mb-5">
+        {byCategory.map(c => <div key={c.category} className="grid grid-cols-12 gap-2 items-center text-sm">
+          <div className="col-span-4 font-medium">{c.category}</div>
+          <div className="col-span-1 text-right text-stone-500 text-xs mono">{c.count}</div>
+          <div className="col-span-6">
+            <div className="bar"><div style={{width:`${c.sharePct}%`, background:"#78716c"}} title={`${c.sharePct}% of in-stock pantry`}/></div>
+          </div>
+          <div className="col-span-1 text-right text-stone-500 text-xs mono">{c.sharePct}%</div>
+        </div>)}
+      </div>
+      <div className="text-xs text-stone-500 mb-2 uppercase tracking-wider">Confidence health</div>
+      <div className="space-y-1">
+        <div className="grid grid-cols-12 gap-2 items-center text-[11px] text-stone-500 uppercase tracking-wider px-1">
+          <div className="col-span-4">Category</div>
+          <div className="col-span-1 text-right">Items</div>
+          <div className="col-span-5">Avg confidence</div>
+          <div className="col-span-2 text-right" title="Items in this category expiring in 5 days or fewer">Expiring ≤5d</div>
+        </div>
+        {byCategory.map(c => <div key={c.category+"-h"} className="grid grid-cols-12 gap-2 items-center text-sm">
+          <div className="col-span-4 font-medium">{c.category}</div>
+          <div className="col-span-1 text-right text-stone-500 text-xs mono">{c.count}</div>
+          <div className="col-span-5 flex items-center gap-2">
+            <div className="flex-1"><Bar pct={c.avgConf}/></div>
+            <span className="mono text-[10px] text-stone-500 min-w-[28px] text-right">{c.avgConf}%</span>
+          </div>
+          <div className={`col-span-2 text-right mono text-xs ${c.expiring>0?"text-amber-700 font-semibold":"text-stone-400"}`}>{c.expiring}</div>
+        </div>)}
       </div>
     </Section>
 
