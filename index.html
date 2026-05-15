@@ -105,9 +105,17 @@ const { useState, useMemo, useEffect, useCallback, useRef, createContext, useCon
 // (2) only apply changes not already listed, (3) append a new
 // entry below describing what they changed.
 // ============================================================
-const SITE_VERSION = "2026-05-14.16";
+const SITE_VERSION = "2026-05-15.3";
 const SITE_CHANGELOG = [
   // newest first
+  { version: "2026-05-15.3", date: "2026-05-15", changes: [
+    "**Parser ported to the Edge Function for .eml inputs.** The 486-line Python `parse_tesco.py` is now also `parse_tesco.ts` (alongside `index.ts` in the function source). Same output shape, byte-for-byte equivalent — verified by a diff harness across all 13 archived .eml files. The function accepts a new `{ retailer, eml }` payload that takes raw email text and runs the MIME walk + HTML extract + parser entirely server-side. The legacy `{ retailer, order }` shape still works (used by the grocery-receipt-archive skill).",
+    "**Dashboard switched to dry-run preview → save for .eml.** `ReceiptParser` for .eml files no longer parses in-browser. The flow is now: drop file → POST raw text to `ingest-receipt?dry_run=true` → render preview from the returned `order` field → click Save → POST the same payload without `dry_run`. Single canonical parser path; if the parser changes, both the dashboard and the skill see the same behaviour after a function deploy. The in-browser `readEmlText` helper is reduced to a one-line `file.text()` wrapper; `parseTesco` is retained for the PDF path only.",
+    "**PDF support stays in-browser by design.** PDF text extracted via pdf.js is structurally different from email HTML extraction (no ` | ` separators, line breaks instead) — making the function tolerant of both would have meant carrying two parsers server-side. Instead, PDFs continue to be extracted and parsed client-side, then POSTed to the function via the legacy `{ retailer, order }` shape. This keeps `parseTesco` in the browser bundle for PDF use only. .eml uploads (the primary path) get the canonical server parser.",
+    "**`ingestReceipt()` wrapper updated.** New signature: `ingestReceipt({ retailer, eml?, order?, dryRun? })`. Returns `{ status: 'dry_run' | 'saved' | 'replaced' | 'duplicate' | 'error', ... }`. New `replaced` status appears when an amendment overwrites an earlier version of the same order — the function deletes the previous receipt + line items and inserts the new ones, returning `{ previous_id, receipt_id, items_inserted }`. UI treats `replaced` like `saved` with different banner copy.",
+    "**Bugs caught and fixed during the port.** (1) MIME walk treated the preamble as a body part — Apple Mail forwards (most of the test set) start with `--boundary` and were dropping their only real part. Rewrote to collect content BETWEEN successive boundary markers. (2) Whitespace collapse with `\\s+ → ' '` destroyed internal double-spaces that the Python parser preserves (e.g. 'Tesco  Mini Corn'). Fix: collapse only adjacent to ` | ` separators. (3) `&nbsp;` decoded to ASCII space lost the byte distinction Python preserves inside item names. Fix: decode to `\\u00a0`. (4) Truncated emails ending with a bare `|` stuck the final price to the pipe and broke the price-token regex. Fix: strip trailing ` |` before tokenising.",
+    "**Known limitations carried forward.** (a) Only Tesco has a server parser — Ocado/Sainsbury's/Waitrose still need the skill in a Claude session, but the function will accept their `order` payloads when pre-parsed. (b) PDF support is desktop+mobile but quality varies with how the PDF was generated (Gmail print-to-PDF tends to fragment text; original .eml is always better when available). (c) The amendment-replaces path is the first thing in the function that hasn't been smoke-tested end-to-end in production — it's tested at unit level (14/14 function tests) but only exercises real DB writes on first deploy.",
+  ]},
   { version: "2026-05-15.2", date: "2026-05-15", changes: [
     "**Orders tab: 'Save to archive' replaces 'Copy JSON' as the primary action.** The parser preview now writes directly to Supabase via a new Edge Function (`ingest-receipt`), eliminating the copy-paste-into-Claude-session step. One-tap save: drop a receipt → parse preview → click Save → row appears in the history below. Copy JSON is still available as a secondary button for backfill, debugging, or sharing.",
     "**Edge Function: `ingest-receipt` (thin HTTP write API).** Deployed at `/functions/v1/ingest-receipt`. Does NOT parse — parsers stay wherever they make sense per caller (in-browser JS for the dashboard, server-side Python for the grocery-receipt-archive skill, eventually server-side TS for an email-forwarding webhook). The function is the single canonical write path that all of them call. Validates the order payload, dedupes by `(retailer, order_number)`, inserts the receipt header + line items, returns `{ status: \"saved\" | \"duplicate\" | \"error\" }`.",
@@ -343,21 +351,40 @@ const SUPABASE = {
 const INGEST_SECRET = "f07caca7c07e77ece835138a152ffa8c";
 const INGEST_URL = `${SUPABASE.url}/functions/v1/ingest-receipt`;
 
-// POST a parsed order to the ingest-receipt function. Returns one of:
+// POST to the ingest-receipt function. Two modes:
+//
+//   ingestReceipt({ retailer, eml, dryRun })
+//     — POST raw email text. Function parses server-side. If dryRun, the
+//       function returns the parsed order without writing to the DB.
+//
+//   ingestReceipt({ retailer, order })
+//     — POST a pre-parsed order (legacy path, used by the in-browser PDF
+//       parser since pdf.js text isn't compatible with the server parser).
+//
+// Returns one of:
+//   { status: "dry_run",   retailer, order }                          (dryRun=true)
 //   { status: "saved",     receipt_id, items_inserted }
+//   { status: "replaced",  previous_id, receipt_id, items_inserted }  (amendment)
 //   { status: "duplicate", existing_id, existing_delivery_date }
 //   { status: "error",     code, message? }
 // Network failures surface as { status: "error", code: "network", message }.
-async function ingestReceipt({ retailer, order }) {
+//
+// Exactly one of `eml` / `order` must be provided. If both are passed, `eml`
+// wins (the server parser is canonical).
+async function ingestReceipt({ retailer, eml, order, dryRun }) {
+  const body = (typeof eml === "string" && eml.length > 0)
+    ? { retailer, eml }
+    : { retailer, order };
+  const url = dryRun ? `${INGEST_URL}?dry_run=true` : INGEST_URL;
   try {
-    const res = await fetch(INGEST_URL, {
+    const res = await fetch(url, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${SUPABASE.anonKey}`,
         "X-Ingest-Secret": INGEST_SECRET,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ retailer, order }),
+      body: JSON.stringify(body),
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok && !json.status) {
@@ -2392,52 +2419,12 @@ async function extractPdfText(file){
   return out.join("\n");
 }
 
-// Read .eml text (UTF-8 best effort). Most modern Tesco emails are
-// quoted-printable encoded; we apply a light decode pass for =E2=80=99 etc.
+// Read .eml text (UTF-8 best effort) and forward as-is to the ingest
+// function. As of 2026-05-15.3 the dashboard no longer parses .eml in the
+// browser — the function does MIME walk + HTML extract + parse server-side.
+// We just hand over `file.text()`.
 async function readEmlText(file){
-  const raw = await file.text();
-  // Split headers from body
-  const idx = raw.search(/\r?\n\r?\n/);
-  let body = idx >= 0 ? raw.slice(idx) : raw;
-
-  // If multipart, try to pluck the text/html or text/plain part
-  const boundaryMatch = raw.match(/boundary="?([^";\r\n]+)"?/i);
-  if (boundaryMatch) {
-    const boundary = boundaryMatch[1];
-    const parts = body.split("--" + boundary);
-    // Prefer text/html (Tesco receipts are HTML); fall back to text/plain
-    const html = parts.find(p => /content-type:\s*text\/html/i.test(p));
-    const plain = parts.find(p => /content-type:\s*text\/plain/i.test(p));
-    const chosen = html || plain || body;
-    const hdrEnd = chosen.search(/\r?\n\r?\n/);
-    body = hdrEnd >= 0 ? chosen.slice(hdrEnd) : chosen;
-  }
-
-  // Decode quoted-printable softlines + escapes
-  body = body
-    .replace(/=\r?\n/g, "")
-    .replace(/=([0-9A-Fa-f]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
-
-  // Strip HTML tags but keep text
-  body = body
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, " ")
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, " ")
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/(p|div|tr|li|h[1-6])>/gi, "\n")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&pound;/g, "£")
-    .replace(/&#163;/g, "£")
-    .replace(/&#39;/g, "'")
-    .replace(/&apos;/g, "'")
-    .replace(/&quot;/g, '"')
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/[ \t]+/g, " ")
-    .replace(/\n\s*\n/g, "\n\n");
-
-  return body;
+  return await file.text();
 }
 
 // Detect retailer from text — minimal viable: Tesco only for now,
@@ -2625,11 +2612,24 @@ function ReceiptParser(){
   const [fileName, setFileName] = useState(null);
   const [showJson, setShowJson] = useState(false);
   const [copiedTick, setCopiedTick] = useState(false);
+  // Tracks the input path used for the previewed file. The dashboard handles
+  // .eml and .pdf differently:
+  //   - "eml": file.text() → POST raw to function with ?dry_run=true → preview
+  //            from the returned `order` field. Save re-POSTs the same raw text
+  //            without ?dry_run=true.
+  //   - "pdf": pdf.js extracts text → parseTesco() in the browser produces the
+  //            order locally → preview from that. Save POSTs the pre-parsed
+  //            `order` via the legacy { retailer, order } shape.
+  // PDF text isn't compatible with the server parser (no ` | ` separators),
+  // hence the split path. .eml is the canonical path.
+  const [inputMode, setInputMode] = useState(null); // "eml" | "pdf" | null
+  const [rawEml, setRawEml]       = useState(null); // raw text for the "eml" path; reused on save
   // Save-to-archive state. Idle until user clicks; transitions to saving →
-  // saved / duplicate / error. Persisted in the component so a successful
-  // save stays visible after the parser preview is dismissed via a new file.
-  const [saveState, setSaveState] = useState("idle"); // idle | saving | saved | duplicate | error
-  const [saveResult, setSaveResult] = useState(null); // { receipt_id?, existing_id?, existing_delivery_date?, message? }
+  // saved / replaced / duplicate / error. Persisted in the component so a
+  // successful save stays visible after the parser preview is dismissed via
+  // a new file.
+  const [saveState, setSaveState] = useState("idle"); // idle | saving | saved | replaced | duplicate | error
+  const [saveResult, setSaveResult] = useState(null); // { receipt_id?, previous_id?, existing_id?, existing_delivery_date?, message? }
   const { refresh: refreshReceipts, localAppend: localAppendReceipt } = useContext(ReceiptsRefreshContext);
   const inputRef = useRef(null);
 
@@ -2642,28 +2642,64 @@ function ReceiptParser(){
     setShowJson(false);
     setSaveState("idle");
     setSaveResult(null);
+    setInputMode(null);
+    setRawEml(null);
     try {
-      let text;
       const lower = file.name.toLowerCase();
-      if (lower.endsWith(".pdf") || file.type === "application/pdf") {
-        text = await extractPdfText(file);
-      } else if (lower.endsWith(".eml") || file.type === "message/rfc822") {
-        text = await readEmlText(file);
-      } else {
-        // Best effort: try as text
-        text = await file.text();
-      }
-      const retailer = detectRetailer(text, file.name);
-      if (retailer !== "tesco") {
-        setStatus("error");
-        setError(retailer
-          ? `Detected retailer "${retailer}" — only Tesco is supported in-app right now. Use the grocery-receipt-archive skill in a Claude session for other retailers.`
-          : "Couldn't identify the retailer. Only Tesco receipts are currently supported in-app.");
+      const isPdf = lower.endsWith(".pdf") || file.type === "application/pdf";
+      const isEml = lower.endsWith(".eml") || file.type === "message/rfc822";
+
+      if (isPdf) {
+        // PDF path: extract text via pdf.js, parse in the browser, preview
+        // the pre-parsed order. Save will POST the order, not raw text.
+        const text = await extractPdfText(file);
+        const retailer = detectRetailer(text, file.name);
+        if (retailer !== "tesco") {
+          setStatus("error");
+          setError(retailer
+            ? `Detected retailer "${retailer}" — only Tesco is supported in-app right now. Use the grocery-receipt-archive skill in a Claude session for other retailers.`
+            : "Couldn't identify the retailer. Only Tesco receipts are currently supported in-app.");
+          return;
+        }
+        const order = parseTesco(text);
+        order.source_file = file.name;
+        setParsed(order);
+        setInputMode("pdf");
+        setStatus("done");
         return;
       }
-      const order = parseTesco(text);
-      order.source_file = file.name;
+
+      // .eml path (or unknown extension fallthrough): hand the raw text to
+      // the function via dry_run. The function detects/parses server-side.
+      const raw = isEml ? await readEmlText(file) : await file.text();
+
+      // Quick local retailer hint — the function will reject non-Tesco eml
+      // anyway, but failing here means we don't pay the network round-trip.
+      const retailer = detectRetailer(raw, file.name);
+      if (retailer && retailer !== "tesco") {
+        setStatus("error");
+        setError(`Detected retailer "${retailer}" — only Tesco is supported in-app right now. Use the grocery-receipt-archive skill in a Claude session for other retailers.`);
+        return;
+      }
+
+      const result = await ingestReceipt({
+        retailer: "tesco",
+        eml: raw,
+        dryRun: true,
+      });
+      if (result.status !== "dry_run") {
+        setStatus("error");
+        setError(result.code
+          ? `${result.code}: ${result.message || "Server parse failed."}`
+          : `Server parse failed${result.status ? ` (status: ${result.status})` : ""}.`);
+        return;
+      }
+      const order = result.order || {};
+      // The function doesn't set source_file from filename — we know it here.
+      if (!order.source_file) order.source_file = file.name;
       setParsed(order);
+      setRawEml(raw);
+      setInputMode("eml");
       setStatus("done");
     } catch (e) {
       console.error("Receipt parse error", e);
@@ -2698,22 +2734,28 @@ function ReceiptParser(){
     }
   };
 
-  // Save the parsed order to Supabase via the ingest-receipt Edge Function.
+  // Save the previewed order to Supabase via the ingest-receipt Edge Function.
   // The function dedupes by (retailer, order_number) and handles the writes
   // atomically — we just POST and react to the response.
+  //
+  // For .eml inputs, we re-POST the same raw text (no dry_run) so the server
+  // parser runs once more and the parsed output is byte-for-byte identical to
+  // what we just previewed. For PDF inputs, the raw text isn't usable by the
+  // server parser, so we send the pre-parsed `order` instead.
   const saveToArchive = async () => {
     if (!parsed) return;
     setSaveState("saving");
     setSaveResult(null);
-    const result = await ingestReceipt({
-      retailer: parsed.retailer || "tesco",
-      order: parsed,
-    });
-    if (result.status === "saved") {
-      setSaveState("saved");
+    const result = (inputMode === "eml" && rawEml)
+      ? await ingestReceipt({ retailer: parsed.retailer || "tesco", eml: rawEml })
+      : await ingestReceipt({ retailer: parsed.retailer || "tesco", order: parsed });
+    if (result.status === "saved" || result.status === "replaced") {
+      setSaveState(result.status);
       setSaveResult(result);
       // Optimistic local-append so the new order appears in OrdersView
-      // immediately. Then refetch in the background as a consistency check.
+      // immediately. Then refetch in the background as a consistency check
+      // (refresh will also reconcile the row id and any field the function
+      // computed differently from our preview).
       localAppendReceipt(parsed, result.receipt_id);
       refreshReceipts();
     } else if (result.status === "duplicate") {
@@ -2742,7 +2784,7 @@ function ReceiptParser(){
         Choose file…
       </button>
       <div className="text-[11px] text-stone-500 mt-2">
-        Tesco only. PDF support requires loading pdf.js (~1MB) on first use.
+        Tesco only. .eml files are parsed server-side; .pdf is parsed in-browser (loads pdf.js ~1MB on first use).
       </div>
     </div>
 
@@ -2832,12 +2874,12 @@ function ReceiptParser(){
             <div className="text-sm font-medium">Save to archive</div>
             <div className="flex items-center gap-2 flex-wrap">
               <button onClick={saveToArchive}
-                      disabled={saveState === "saving" || saveState === "saved" || saveState === "duplicate" || parsed.parse_quality === "no_items_found"}
+                      disabled={saveState === "saving" || saveState === "saved" || saveState === "replaced" || saveState === "duplicate" || parsed.parse_quality === "no_items_found"}
                       title={parsed.parse_quality === "no_items_found"
                         ? "Can't save — no items were extracted. Try a different copy of the receipt."
                         : "Save this order directly to Supabase via the ingest-receipt Edge Function"}
                       className={"text-xs px-3 py-1 rounded border " +
-                        (saveState === "saved"
+                        (saveState === "saved" || saveState === "replaced"
                           ? "border-emerald-700 bg-emerald-700 text-white"
                           : saveState === "duplicate"
                           ? "border-amber-700 bg-amber-50 text-amber-800"
@@ -2849,6 +2891,7 @@ function ReceiptParser(){
                         (parsed.parse_quality === "no_items_found" ? " opacity-50 cursor-not-allowed" : "")}>
                 {saveState === "saving"    ? "Saving…"
                  : saveState === "saved"   ? "✓ Saved to archive"
+                 : saveState === "replaced" ? "✓ Replaced (amendment)"
                  : saveState === "duplicate" ? "Already in archive"
                  : saveState === "error"   ? "Save failed — retry"
                  : "💾 Save to archive"}
@@ -2869,6 +2912,11 @@ function ReceiptParser(){
           {saveState === "saved" && saveResult && (
             <div className="text-[11px] bg-emerald-50 border border-emerald-200 text-emerald-800 rounded px-2 py-1.5 mt-1">
               Inserted {saveResult.items_inserted ?? 0} line items. The order is now in the history below.
+            </div>
+          )}
+          {saveState === "replaced" && saveResult && (
+            <div className="text-[11px] bg-emerald-50 border border-emerald-200 text-emerald-800 rounded px-2 py-1.5 mt-1">
+              Replaced the previous version of this order with the amendment ({saveResult.items_inserted ?? 0} line items). The old row has been deleted.
             </div>
           )}
           {saveState === "duplicate" && saveResult && (
