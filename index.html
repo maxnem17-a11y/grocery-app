@@ -110,9 +110,16 @@ const { useState, useMemo, useEffect, useCallback, useRef, createContext, useCon
 // (2) only apply changes not already listed, (3) append a new
 // entry below describing what they changed.
 // ============================================================
-const SITE_VERSION = "2026-05-15.22";
+const SITE_VERSION = "2026-05-15.23";
 const SITE_CHANGELOG = [
   // newest first
+  { version: "2026-05-15.23", date: "2026-05-15", changes: [
+    "**Gaps tab: KPI strip trimmed from 5 cards to 2.** Removed 'Orders tracked', 'Latest delivery', and 'Excluded by rules'. The strip was operational metadata about the receipt corpus, not actions to take — when the user is scanning this tab they're looking for what to add to the basket, not how many orders have been parsed. The two surviving cards ('Regulars (≥N)' and 'Real gaps') are the action axis: how many candidates exist and how many made it through filtering. Context that was on the removed cards (order count, latest delivery date + number, excluded-by-rule count and number of household rules) is folded into the InfoTips on the two surviving cards, so nothing is lost — just stops competing for attention. Grid shrinks from `sm:grid-cols-5` to `grid-cols-2`.",
+    "**Gaps tab: subtitle added to 'Pick your basket gaps' section.** `subtitle=\"Regulars you buy often that are missing from your pantry\"`. The section header was a verb phrase with no explanation underneath — the explanatory bullets only showed once expanded. Subtitle now answers 'what is in this list' at a glance.",
+    "**Recipes tab: filter blurb moved into an InfoTip.** The standalone `<div className=\"text-xs text-stone-500 mb-2\">Filters: …</div>` paragraph above the filter row was ~3 lines of body copy explaining controls that mostly explain themselves (search input, three dropdowns, a slider). Removed the standalone div; placed an InfoTip ⓘ at the right end of the filter row with the same body text. Same information, recovers vertical space, hides explanation behind an opt-in hover.",
+    "**Stats tab: all sections now collapsible, collapsed by default.** Previously Workflow integrity, Pantry composition & health, and Audience breakdown all sat open — the tab loaded as a wall of stats most of which were rarely consulted. Now matches the Planner tab pattern: each section has `collapsible defaultOpen={false}` so the tab loads as four section headers (after this commit's new section is added) and you expand only what you want. The first-paint signal moves from 'wall of numbers' to 'here are the audits available'.",
+    "**Stats tab: new 'Recipe page-number coverage' section.** Counts book-sourced recipes (source.type === 'book') with vs. without a page number, surfaces the gap as 3 KPI cards (Book recipes / Missing / % complete) plus a per-book breakdown table sorted worst-offenders-first. Current state: 76 of 152 book recipes are missing page numbers (50% complete) — Dishoom is 0/23 tagged, EAST is 0/13, East is 10/35. The breakdown table is hidden when nothing is missing. Useful when cross-referencing the physical book mid-cook. Web/Instagram recipes excluded — they don't have page numbers. Section sits between Workflow integrity and Pantry composition & health.",
+  ]},
   { version: "2026-05-15.22", date: "2026-05-15", changes: [
     "**Planner tab: section titles relabelled** for snappier scanning. 'Use these first — expiring ≤5 days' → 'Going soon — expiring ≤5 days'. 'Whole-household picks' → 'Everybody eats'. 'High-protein options for Max (≥30g)' → 'Gains (≥30g protein)'. 'Quick wins ≤25 min' → 'Quick wins' (the '≤25 min' was redundant with the subtitle 'At least 50% in-pantry and short total time' and the tip already names the threshold). Subtitles and InfoTip copy unchanged.",
     "**Note on the Gains section showing 4 cards, not 6.** The section caps at `slice(0,6)` but the underlying filter (`_flags.max !== 'blocked' && protein_per_serving_g >= 30`) only yields 4 hits across the current library: Bridget Jones's Pan-Fried Salmon (35g), Mackerel & Bob's Baked Beans (32g), Jacket Potatoes with Egg and Tonnato (32g), Protein Strongback Smoothie (30g). The slice is fine; the library is just thin at this threshold for Max-eligible (no-meat) recipes. The known_gaps manifest already flags this ('Quick post-training meals for Max ≤15 min ≥45g protein'). Threshold left at 30g per user instruction; to get 6 cards either lower the bar or add more pescatarian high-protein recipes to the library.",
@@ -1565,9 +1572,6 @@ function RecipesView({pantry, outOfStock, cooked, addCooked, eaterFilter, setEat
         tipAlign="right"
         tip="Recipes you've marked as cooked in this browser. The list is in the Planner tab — paste it into a Claude session to update your canonical pantry."/>
     </div>
-    <div className="text-xs text-stone-500 mb-2">
-      <strong>Filters:</strong> search by recipe name or ingredient (e.g. type "tofu" to find every recipe using it), narrow by source/eater, sort the list, and use the slider to hide recipes you don't have enough ingredients for. Click any recipe row to see what's in your pantry vs missing, plus per-eater notes.
-    </div>
     <div className="flex flex-wrap gap-2 mb-3 items-center">
       <input className="border border-stone-300 rounded-lg px-3 py-1.5 text-sm flex-1 min-w-[160px]" placeholder="Search by name or ingredient (e.g. tofu, ginger)…" value={q} onChange={e=>setQ(e.target.value)} />
       <select className="border border-stone-300 rounded-lg px-2 py-1.5 text-sm" value={source} onChange={e=>setSource(e.target.value)} title="Filter by which file the recipe came from">
@@ -1591,6 +1595,7 @@ function RecipesView({pantry, outOfStock, cooked, addCooked, eaterFilter, setEat
         Min makeable {minMakeable}%
         <input type="range" min="0" max="100" step="10" value={minMakeable} onChange={e=>setMinMakeable(+e.target.value)} className="w-24"/>
       </label>
+      <InfoTip align="below-right">Search by recipe name or ingredient (e.g. type "tofu" to find every recipe using it), narrow by source/eater, sort the list, and use the slider to hide recipes you don't have enough ingredients for. Click any recipe row to see what's in your pantry vs missing, plus per-eater notes.</InfoTip>
     </div>
 
     <div className="space-y-2">
@@ -4193,25 +4198,18 @@ function GapsView({pantry, outOfStock}){
   }, [visibleRaw, regSortBy, regSortDir]);
 
   return <div className="space-y-5">
-    <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-      <Stat label="Orders tracked" value={analysis.orderCount}
-        tip="Number of Tesco orders parsed from receipts. The more orders, the more reliable the 'regulars' detection."/>
-      <Stat label="Latest delivery" value={formatDate(analysis.latest.delivery_date)} sub={`#${analysis.latest.order_number}`}
-        tip="The most recent Tesco order. Items not in this order but historically bought regularly are candidates for the gap list."/>
+    <div className="grid grid-cols-2 gap-3">
       <Stat label={`Regulars (≥${minOrders})`} value={analysis.regulars.length}
-        tip={`Items appearing in at least ${minOrders} different orders. Adjust the 'Min orders' selector below to be stricter or looser.`}/>
+        tip={`Items appearing in at least ${minOrders} different orders out of ${analysis.orderCount} parsed Tesco orders. Adjust the 'Min orders' selector below to be stricter or looser.`}/>
       <Stat label="Real gaps" value={analysis.gaps.length} tone={analysis.gaps.length>0?"warn":"ok"}
             sub="Not in latest order, not in pantry"
-            tip="The candidates for your next basket: items you buy regularly that aren't in your latest delivery and aren't already in the pantry. Excludes anything ruled out by a household never-restock rule."/>
-      <Stat label="Excluded by rules" value={analysis.excluded.length} tone="info"
-            sub={`${(HOUSEHOLD_RULES.never_restock||[]).length} household rule(s)`}
             tipAlign="right"
-            tip="Items the household has explicitly told the system not to suggest restocking (e.g. dairy milk — no one drinks it). View the rule list by clicking the 'Excluded' filter pill."/>
+            tip={`The candidates for your next basket: items you buy regularly that aren't in your latest delivery (#${analysis.latest.order_number}, ${formatDate(analysis.latest.delivery_date)}) and aren't already in the pantry. Excludes anything ruled out by a household never-restock rule (${analysis.excluded.length} excluded by ${(HOUSEHOLD_RULES.never_restock||[]).length} rule(s)).`}/>
     </div>
 
     <SuggestedBasket pantry={pantry} outOfStock={outOfStock}/>
 
-    <Section title="Pick your basket gaps" tone="info" collapsible defaultOpen={false}
+    <Section title="Pick your basket gaps" subtitle="Regulars you buy often that are missing from your pantry" tone="info" collapsible defaultOpen={false}
       tip="Compares the items you buy most often against what you currently have. Filters by category below.">
       <p className="text-sm text-stone-700 leading-relaxed">
         Spots items you buy regularly but don't currently have — so they're candidates for your next basket.
@@ -4365,6 +4363,29 @@ function AuditView({pantry, cooked, outOfStock}){
       adults: list.filter(r=>r._audience==="adults-only").length,
     };
   });
+  // Page-number coverage across book-sourced recipes. The recipe schema uses
+  // source.type === "book" with an optional page number; many were imported
+  // before page-tagging was systematic. Surfacing this lets the user see which
+  // books need a pass to add page refs, which is helpful when cross-referencing
+  // a recipe in the physical book during cooking. Excludes web/instagram/other
+  // source types — those don't have page numbers by nature.
+  const bookRecipes = RECIPES.filter(r => r.source && r.source.type === "book");
+  const missingPage = bookRecipes.filter(r => r.source.page == null || r.source.page === "" || r.source.page === 0);
+  const pagePct = bookRecipes.length ? Math.round(100 * (bookRecipes.length - missingPage.length) / bookRecipes.length) : 100;
+  // Group the missing-page recipes by book title for the per-book breakdown.
+  const missingByBook = useMemo(() => {
+    const groups = new Map();
+    bookRecipes.forEach(r => {
+      const title = (r.source.title || "Unknown").trim();
+      if (!groups.has(title)) groups.set(title, { title, total: 0, missing: 0 });
+      const g = groups.get(title);
+      g.total += 1;
+      if (r.source.page == null || r.source.page === "" || r.source.page === 0) g.missing += 1;
+    });
+    return [...groups.values()]
+      .map(g => ({ ...g, completePct: g.total ? Math.round(100 * (g.total - g.missing) / g.total) : 100 }))
+      .sort((a, b) => b.missing - a.missing); // worst offenders first
+  }, [bookRecipes]);
   // Pantry composition + confidence health by category. Combines task 2A (counts
   // and share-of-pantry) with task 2B (avg confidence and expiring-soon count) in
   // one rollup. Items without a category are bucketed under "uncategorised" so the
@@ -4415,7 +4436,7 @@ function AuditView({pantry, cooked, outOfStock}){
       </div>
       <span className="text-xs text-stone-500 mono">{lastReceiptDate ? `last receipt: ${formatDate(lastReceiptDate)}` : "no receipts yet"}</span>
     </div>
-    <Section title="Workflow integrity" subtitle="Health check — green means all good, amber means a small fix is needed" tone="ok"
+    <Section title="Workflow integrity" subtitle="Health check — green means all good, amber means a small fix is needed" tone="ok" collapsible defaultOpen={false}
       tip="Each card reports on one data-quality dimension: are all recipes tagged with an audience, are all pantry items tagged with an allergen flag, etc. Status chip on each card: ✓ OK = nothing to do, ⚠ Fix needed = small repair recommended, ⚠ Critical action needed = fix before relying on this data.">
       <div className="grid sm:grid-cols-2 gap-3 text-sm">
         <GapCard label="Recipes with audience tag" value={taggedRecipes} of={RECIPES.length} severity={untagged > 0 ? "medium":"low"}
@@ -4433,8 +4454,44 @@ function AuditView({pantry, cooked, outOfStock}){
       </div>
     </Section>
 
+    <Section title="Recipe page-number coverage"
+      subtitle={`${missingPage.length} of ${bookRecipes.length} book recipes missing a page reference (${pagePct}% complete)`}
+      tone={missingPage.length > 0 ? "warn" : "ok"}
+      collapsible defaultOpen={false}
+      tip="Counts how many book-sourced recipes have a page number recorded vs. how many are missing one. Page references are handy when cross-referencing the physical book mid-cook. Web and Instagram recipes are excluded — they don't have page numbers by nature.">
+      <div className="grid sm:grid-cols-3 gap-3 mb-4">
+        <Stat label="Book recipes" value={bookRecipes.length}
+          tip="Total recipes sourced from a book (source.type === 'book'). Excludes web and Instagram saves."/>
+        <Stat label="Missing page numbers" value={missingPage.length}
+          tone={missingPage.length > 0 ? "warn" : "ok"}
+          tip="Book recipes with no page number in source.page. Worth patching when you have the book to hand — useful for cross-referencing mid-cook."/>
+        <Stat label="% complete" value={`${pagePct}%`}
+          tone={pagePct >= 90 ? "ok" : pagePct >= 50 ? "warn" : "info"}
+          tipAlign="right"
+          tip="Percentage of book recipes with a page number recorded. 100% means every book recipe in the library cross-references its source page."/>
+      </div>
+      {missingByBook.some(b => b.missing > 0) && <>
+        <div className="text-xs text-stone-500 mb-2 uppercase tracking-wider">By book — worst offenders first</div>
+        <div className="space-y-1">
+          <div className="grid grid-cols-12 gap-2 items-center text-[11px] text-stone-500 uppercase tracking-wider px-1">
+            <div className="col-span-5">Book</div>
+            <div className="col-span-2 text-right">Missing</div>
+            <div className="col-span-3">Coverage</div>
+            <div className="col-span-2 text-right">% complete</div>
+          </div>
+          {missingByBook.map(b => <div key={b.title} className="grid grid-cols-12 gap-2 items-center text-sm">
+            <div className="col-span-5 font-medium truncate" title={b.title}>{b.title}</div>
+            <div className={`col-span-2 text-right mono text-xs ${b.missing > 0 ? "text-amber-700 font-semibold" : "text-stone-400"}`}>{b.missing} / {b.total}</div>
+            <div className="col-span-3"><Bar pct={b.completePct}/></div>
+            <div className="col-span-2 text-right mono text-xs text-stone-500">{b.completePct}%</div>
+          </div>)}
+        </div>
+      </>}
+    </Section>
+
     <Section title="Pantry composition & health"
       subtitle="By category — what's in the kitchen and which categories are at risk"
+      collapsible defaultOpen={false}
       tip="Two views in one section: (1) how the in-stock pantry breaks down by category — count, share of total, and an at-a-glance bar; (2) the average confidence score per category plus how many items in each are expiring in ≤5 days. Out-of-stock items are excluded throughout — they're not really in the pantry until restored. Confidence decays automatically by category type, so this rolls up that decay so you can see at a glance which categories are quietly rotting (e.g. produce at 35% avg vs. dry-goods at 92%).">
       <div className="grid sm:grid-cols-3 gap-3 mb-4">
         <Stat label="Categories tracked" value={byCategory.length}
@@ -4478,6 +4535,7 @@ function AuditView({pantry, cooked, outOfStock}){
     </Section>
 
     <Section title="Audience breakdown across library"
+      collapsible defaultOpen={false}
       tip="How many recipes in each source file are safe for the whole household vs. adults-only vs. need-a-label-check. A high adults-only ratio means most recipes need adaptation if Khalil is eating.">
       <div className="grid sm:grid-cols-3 gap-3 mb-3">
         <Stat label="Whole-household safe" value={byAudience["whole-household"].length} tone="ok" sub={`${Math.round(100*byAudience["whole-household"].length/RECIPES.length)}% of library`}
