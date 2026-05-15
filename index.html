@@ -110,9 +110,15 @@ const { useState, useMemo, useEffect, useCallback, useRef, createContext, useCon
 // (2) only apply changes not already listed, (3) append a new
 // entry below describing what they changed.
 // ============================================================
-const SITE_VERSION = "2026-05-15.21";
+const SITE_VERSION = "2026-05-15.22";
 const SITE_CHANGELOG = [
   // newest first
+  { version: "2026-05-15.22", date: "2026-05-15", changes: [
+    "**Planner tab: section titles relabelled** for snappier scanning. 'Use these first — expiring ≤5 days' → 'Going soon — expiring ≤5 days'. 'Whole-household picks' → 'Everybody eats'. 'High-protein options for Max (≥30g)' → 'Gains (≥30g protein)'. 'Quick wins ≤25 min' → 'Quick wins' (the '≤25 min' was redundant with the subtitle 'At least 50% in-pantry and short total time' and the tip already names the threshold). Subtitles and InfoTip copy unchanged.",
+    "**Note on the Gains section showing 4 cards, not 6.** The section caps at `slice(0,6)` but the underlying filter (`_flags.max !== 'blocked' && protein_per_serving_g >= 30`) only yields 4 hits across the current library: Bridget Jones's Pan-Fried Salmon (35g), Mackerel & Bob's Baked Beans (32g), Jacket Potatoes with Egg and Tonnato (32g), Protein Strongback Smoothie (30g). The slice is fine; the library is just thin at this threshold for Max-eligible (no-meat) recipes. The known_gaps manifest already flags this ('Quick post-training meals for Max ≤15 min ≥45g protein'). Threshold left at 30g per user instruction; to get 6 cards either lower the bar or add more pescatarian high-protein recipes to the library.",
+    "**Pantry table: column widths rebalanced.** Previous grid was Item 3 / Category 2 / Qty 2 / Conf 1 / Expires 1 / Khalil 1 / Actions 2 = 12. Qty cell was getting squeezed by the inline − [value] + buttons, and the Conf bar+% was getting clipped on narrow widths. New grid: Item 3 / Category 1 / Qty 3 / Conf 2 / Expires 1 / Khalil 1 / Actions 1. Net: +1 each to Qty and Conf, −1 each from Category and Actions. Category cell gets `truncate` + `title` tooltip so longer values ('condiment', 'tinned-protein') don't wrap and break the row. Actions button label shortened 'Out of stock' → 'Out' to fit the narrower cell; full text preserved in the tooltip. Header and body row both updated to keep grid alignment.",
+    "**Pantry table: 'Conf' column renamed to 'Freshness'.** The two-letter abbreviation never read as anything other than developer shorthand. 'Freshness' is what the bar actually means to a non-developer reading the screen. Sort key (`conf`), comparator, and InfoTip body unchanged — pure label swap.",
+  ]},
   { version: "2026-05-15.21", date: "2026-05-15", changes: [
     "**Orders tab: 'Spend by pantry category' Section.** New section sits directly below 'Spend by aisle' so both category cuts are read together. Joins receipt line items → SKU index → pantry items → pantry categories. The aisle view uses Tesco's taxonomy (fridge / freezer / cupboard / etc.); this view uses your pantry's taxonomy (protein / produce / dry-goods / dairy-alt / seasoning / etc.) which is more action-oriented because it's the same axis the Pantry tab and Stats tab now cut on. Identical bar-row visual rhythm to the aisle view (28px-wide label column upgraded to 32px to fit longer pantry category names; teal-700 bar with stone-grey for uncategorised; mono £-total on the right). Adds a `sharePct` column between the bar and the total so you can see proportion at a glance. **Timeframe toggle** above the bars: 'All time' (default, every receipt — matches the spend chart), 'Last 90 days', 'Last 30 days'. Rolling windows from today, not calendar months. Header strip on the right shows total spend, total line count, and % of lines that matched to a pantry category (low match % = receipts contain lots of items not yet in pantry).",
     "**Receipt → pantry category join chain.** receipt line item.name → `lookupSku(name, skuIndex)` → SKU row's `basket_key` → exact lowercased match against `pantry.item` → `pantry.category`. Any step failing buckets the line as 'uncategorised'. The basket_key bridge matters because Tesco's product names (`Tesco 2 Boneless Salmon Fillets 260G`) differ from pantry's canonical keys (`salmon fillets`); reusing the same SKU index that powers SuggestedBasket and the price-lookup helpers keeps the matching logic in one place. Line spend = `total_price_gbp` if present, falls back to `unit_price_gbp × qty`, skips the line if neither is available. Unavailable status lines are excluded — they have no real spend even if priced. Uncategorised bucket is sorted to the bottom of the list regardless of spend so the categorised stack reads cleanly first.",
@@ -1446,28 +1452,28 @@ function PantryView({pantry, outOfStock, toggleOutOfStock, qtyAdjustments, adjus
     <div className="card overflow-hidden">
       <div className="grid grid-cols-12 gap-2 text-xs text-stone-500 uppercase tracking-wider px-4 py-2 border-b border-stone-200 bg-stone-50">
         <SortHeader colSpan={3} sortKey="item" sortBy={sortBy} sortDir={sortDir} onClick={toggleSort}>Item</SortHeader>
-        <SortHeader colSpan={2} sortKey="category" sortBy={sortBy} sortDir={sortDir} onClick={toggleSort}>Category</SortHeader>
-        <SortHeader colSpan={2} sortKey="qty" sortBy={sortBy} sortDir={sortDir} onClick={toggleSort} align="center">Qty</SortHeader>
-        <SortHeader colSpan={1} sortKey="conf" sortBy={sortBy} sortDir={sortDir} onClick={toggleSort}>
-          Conf <InfoTip align="below">How likely the item is still usable. Starts at ~95% on purchase day and decays automatically by category. Anything below 30% is flagged 'low'.</InfoTip>
+        <SortHeader colSpan={1} sortKey="category" sortBy={sortBy} sortDir={sortDir} onClick={toggleSort}>Category</SortHeader>
+        <SortHeader colSpan={3} sortKey="qty" sortBy={sortBy} sortDir={sortDir} onClick={toggleSort} align="center">Qty</SortHeader>
+        <SortHeader colSpan={2} sortKey="conf" sortBy={sortBy} sortDir={sortDir} onClick={toggleSort}>
+          Freshness <InfoTip align="below">How likely the item is still usable. Starts at ~95% on purchase day and decays automatically by category. Anything below 30% is flagged 'low'.</InfoTip>
         </SortHeader>
         <SortHeader colSpan={1} sortKey="expires" sortBy={sortBy} sortDir={sortDir} onClick={toggleSort}>Expires</SortHeader>
         <SortHeader colSpan={1} sortKey="khalil" sortBy={sortBy} sortDir={sortDir} onClick={toggleSort} align="center">
           Khalil <InfoTip align="below-right">⚠️ = contains a Khalil allergen · ? = depends on the brand/label · ✓ = safe.</InfoTip>
         </SortHeader>
-        <div className="col-span-2 text-right">Actions</div>
+        <div className="col-span-1 text-right">Actions</div>
       </div>
       <div className="divide-y divide-stone-100">
         {filtered.map((r,i)=> (
           <div key={r.item+i} className={`grid grid-cols-12 gap-2 items-center px-4 py-2 text-sm ${r._out?"opacity-40 line-through":""}`}>
             <div className="col-span-3 font-medium" title={r.purchased ? `bought ${formatDate(r.purchased)}` : ""}>{r.item}</div>
-            <div className="col-span-2 text-stone-500 text-xs">{r.category}</div>
-            <div className="col-span-2 text-center mono text-xs flex items-center justify-center gap-1">
+            <div className="col-span-1 text-stone-500 text-xs truncate" title={r.category}>{r.category}</div>
+            <div className="col-span-3 text-center mono text-xs flex items-center justify-center gap-1">
               <button onClick={()=>adjustQty(r.item, -1)} disabled={r._out} className="qty-btn" title="Decrement qty (used one)">−</button>
               <span className="min-w-[55px] inline-block">{renderQty(r.qty, r._delta)}</span>
               <button onClick={()=>adjustQty(r.item, +1)} disabled={r._out} className="qty-btn" title="Increment qty (bought more)">+</button>
             </div>
-            <div className="col-span-1"><Bar pct={r._conf}/><div className="mono text-[10px] text-stone-500 mt-0.5">{r._conf}%</div></div>
+            <div className="col-span-2"><Bar pct={r._conf}/><div className="mono text-[10px] text-stone-500 mt-0.5">{r._conf}%</div></div>
             <div className="col-span-1 text-xs leading-tight" title={r.expires ? `expires ${formatDate(r.expires)}` : ""}>
               {r._dExp===null ? <span className="text-stone-400">—</span>
                 : r._dExp <= 0 ? <>
@@ -1488,10 +1494,10 @@ function PantryView({pantry, outOfStock, toggleOutOfStock, qtyAdjustments, adjus
                 : r._flag==="check" ? <Chip tone="warn" title="May contain a Khalil allergen — check the product label">?</Chip>
                 : <Chip tone="ok" title="Safe for Khalil">✓</Chip>}
             </div>
-            <div className="col-span-2 text-right">
+            <div className="col-span-1 text-right">
               {r._syncErr && <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500 mr-1.5 align-middle" title={r._syncErr}></span>}
-              <button onClick={()=>toggleOutOfStock(r.item)} className="text-[11px] text-stone-500 hover:text-red-700 underline" title={r._out?"Restore this item to the pantry":"Mark this item as out of stock — it will be excluded from recipe matching"}>
-                {r._out ? "Restore" : "Out of stock"}
+              <button onClick={()=>toggleOutOfStock(r.item)} className="text-[11px] text-stone-500 hover:text-red-700 underline whitespace-nowrap" title={r._out?"Restore this item to the pantry":"Mark this item as out of stock — it will be excluded from recipe matching"}>
+                {r._out ? "Restore" : "Out"}
               </button>
             </div>
           </div>
@@ -2137,7 +2143,7 @@ function PlannerView({pantry, outOfStock, cooked}){
   }).sort((a,b)=>b._make.pct-a._make.pct).slice(0,6);
 
   return <div className="space-y-6">
-    {expiring.length>0 && <Section title="Use these first — expiring ≤5 days" tone="warn" collapsible defaultOpen={false}
+    {expiring.length>0 && <Section title="Going soon — expiring ≤5 days" tone="warn" collapsible defaultOpen={false}
       tip="Pantry items estimated to expire within 5 days, sorted by urgency. The recipes below are ones that use at least one of these items.">
       <div className="flex flex-wrap gap-2">
         {expiring.map((e,i)=> <Chip key={i} tone={e._dExp<=2?"danger":"warn"} title={e.expires ? `expires ${formatDate(e.expires)}` : ""}>{e.item} · {e._dExp}d</Chip>)}
@@ -2147,15 +2153,15 @@ function PlannerView({pantry, outOfStock, cooked}){
         <RecipeMicroList items={usesExpiring}/>
       </>}
     </Section>}
-    <Section title={`Whole-household picks · ${wholeHousehold.length}`} tone="ok" subtitle="Top 6 by makeability — recipes you mostly already have ingredients for" collapsible defaultOpen={false}
+    <Section title={`Everybody eats · ${wholeHousehold.length}`} tone="ok" subtitle="Top 6 by makeability — recipes you mostly already have ingredients for" collapsible defaultOpen={false}
       tip="Recipes safe for everyone (Max, Emily, and Khalil), ranked by how much of the ingredient list you already have in the pantry.">
       <RecipeMicroList items={wholeHousehold}/>
     </Section>
-    <Section title="High-protein options for Max (≥30g)" tone="info" subtitle="Top 6 by protein per serving — pescatarian-safe" collapsible defaultOpen={false}
+    <Section title="Gains (≥30g protein)" tone="info" subtitle="Top 6 by protein per serving — pescatarian-safe" collapsible defaultOpen={false}
       tip="Recipes Max can eat (no meat) that hit at least 30g protein per serving — useful for training days. Sorted by protein content, highest first.">
       <RecipeMicroList items={highProteinAdult}/>
     </Section>
-    <Section title="Quick wins ≤25 min" tone="accent" subtitle="At least 50% in-pantry and short total time" collapsible defaultOpen={false}
+    <Section title="Quick wins" tone="accent" subtitle="At least 50% in-pantry and short total time" collapsible defaultOpen={false}
       tip="Fast meals (prep + cook ≤25 min) where you already have at least half the ingredients. Good for weeknight 'what can I make tonight'.">
       <RecipeMicroList items={quickMakeable}/>
     </Section>
