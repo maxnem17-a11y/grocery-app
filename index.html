@@ -110,9 +110,14 @@ const { useState, useMemo, useEffect, useCallback, useRef, createContext, useCon
 // (2) only apply changes not already listed, (3) append a new
 // entry below describing what they changed.
 // ============================================================
-const SITE_VERSION = "2026-05-15.9";
+const SITE_VERSION = "2026-05-15.10";
 const SITE_CHANGELOG = [
   // newest first
+  { version: "2026-05-15.10", date: "2026-05-15", changes: [
+    "**Planner tab renamed to Cook.** Label only — the underlying tab key (`planner`), the view component (`PlannerView`), and the subtitle copy are unchanged. The subtitle already started with 'What to cook this week…' so it reads naturally with the new name.",
+    "**Cook tab: 'Unlock the most recipes' section deleted.** The same content already lives on the Gaps tab as 'Ingredients that unlock the most recipes' — no point showing it twice. The `leverage` useMemo in PlannerView stays (the basket suggestion still consumes it), only the visible Section is gone.",
+    "**Pending for next chat:** move 'Suggested next basket' from Cook into Gaps and rename Gaps → Basket. Deferred this turn because the basket logic (~310 lines: priceIndex / gapAnalysis / nextDelivery memos, basket useMemo, openedSkus state, openableItems / blockedItems / openNext / resetOpened / buildBasketPayload / downloadBasketJson / copyBasketJson handlers, plus the UI Section) needs extracting into a standalone `<SuggestedBasket>` component, and the size + this chat's context made that risky to land cleanly.",
+  ]},
   { version: "2026-05-15.9", date: "2026-05-15", changes: [
     "**Home page declutter: secondary header removed.** The old `<h1>Grocery intelligence</h1>` block (with its `recipes · pantry items · expiring soon · cooked · orders` counter line, last-receipt date, and ? Help button) is gone. The brand block at the top of the page (Larder wordmark + jar + delivery countdown) is now the only thing above the tab nav.",
     "**Help button moved.** The `? Help` pill that used to live in the top-right of the App secondary header now sits alongside the modern/retro style toggle in the brand block. Same behaviour — opens the HelpBanner.",
@@ -2066,10 +2071,6 @@ function PlannerView({pantry, outOfStock, cooked}){
     <Section title="Quick wins ≤25 min" tone="accent" subtitle="At least 50% in-pantry and short total time" collapsible defaultOpen={false}
       tip="Fast meals (prep + cook ≤25 min) where you already have at least half the ingredients. Good for weeknight 'what can I make tonight'.">
       <RecipeMicroList items={quickMakeable}/>
-    </Section>
-    <Section title="Unlock the most recipes" tone="info" subtitle="One ingredient → many newly-makeable meals" collapsible defaultOpen={false}
-      tip="Each row is one ingredient that, if added to your pantry, would push the most recipes over the 70% makeable threshold. Click a row to see exactly which recipes it unlocks. Khalil-blocked recipes are excluded from the ranking.">
-      <LeverageTileGrid items={leverage}/>
     </Section>
     {cooked.length > 0 && <Section title={`Cooked log · ${cooked.length}`} tone="neutral" subtitle="Saved to local storage on this device" collapsible defaultOpen={false}
       tip="Recipes you've marked cooked via the Recipes tab. This log lives only in this browser — paste it into a Claude session so it can update your canonical pantry quantities.">
@@ -4661,7 +4662,7 @@ function App(){
   }, [tab, cooked, outOfStock, qtyAdjustments, eaterFilter, loading]);
 
   const tabs = [
-    ["planner","Planner", "What to cook this week, grouped by what's expiring, what's whole-household-safe, and what's high-protein."],
+    ["planner","Cook", "What to cook this week, grouped by what's expiring, what's whole-household-safe, and what's high-protein."],
     ["recipes","Recipes", "Search and filter every recipe in your library. Sort by makeability, protein, or prep time."],
     ["pantry","Pantry", "Everything currently in the kitchen, with expiry and confidence tracking. Mark items out of stock if you've used them up."],
     ["gaps","Gaps", "Items you buy regularly that are missing from both your latest order and the pantry — candidates for the next basket."],
