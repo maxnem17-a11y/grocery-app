@@ -110,9 +110,14 @@ const { useState, useMemo, useEffect, useCallback, useRef, createContext, useCon
 // (2) only apply changes not already listed, (3) append a new
 // entry below describing what they changed.
 // ============================================================
-const SITE_VERSION = "2026-05-15.20";
+const SITE_VERSION = "2026-05-15.21";
 const SITE_CHANGELOG = [
   // newest first
+  { version: "2026-05-15.21", date: "2026-05-15", changes: [
+    "**Orders tab: 'Spend by pantry category' Section.** New section sits directly below 'Spend by aisle' so both category cuts are read together. Joins receipt line items → SKU index → pantry items → pantry categories. The aisle view uses Tesco's taxonomy (fridge / freezer / cupboard / etc.); this view uses your pantry's taxonomy (protein / produce / dry-goods / dairy-alt / seasoning / etc.) which is more action-oriented because it's the same axis the Pantry tab and Stats tab now cut on. Identical bar-row visual rhythm to the aisle view (28px-wide label column upgraded to 32px to fit longer pantry category names; teal-700 bar with stone-grey for uncategorised; mono £-total on the right). Adds a `sharePct` column between the bar and the total so you can see proportion at a glance. **Timeframe toggle** above the bars: 'All time' (default, every receipt — matches the spend chart), 'Last 90 days', 'Last 30 days'. Rolling windows from today, not calendar months. Header strip on the right shows total spend, total line count, and % of lines that matched to a pantry category (low match % = receipts contain lots of items not yet in pantry).",
+    "**Receipt → pantry category join chain.** receipt line item.name → `lookupSku(name, skuIndex)` → SKU row's `basket_key` → exact lowercased match against `pantry.item` → `pantry.category`. Any step failing buckets the line as 'uncategorised'. The basket_key bridge matters because Tesco's product names (`Tesco 2 Boneless Salmon Fillets 260G`) differ from pantry's canonical keys (`salmon fillets`); reusing the same SKU index that powers SuggestedBasket and the price-lookup helpers keeps the matching logic in one place. Line spend = `total_price_gbp` if present, falls back to `unit_price_gbp × qty`, skips the line if neither is available. Unavailable status lines are excluded — they have no real spend even if priced. Uncategorised bucket is sorted to the bottom of the list regardless of spend so the categorised stack reads cleanly first.",
+    "**OrdersView now accepts `pantry` as a prop.** Previously took no props (read everything from contexts). Now takes `pantry` for the category join. Single-line change in the App render at line ~5485 (`<OrdersView pantry={pantry}/>`). Considered creating a `PantryContext` to avoid the prop drilling but only one tab consumes pantry that doesn't already accept it as a prop — context would be over-engineering for one consumer.",
+  ]},
   { version: "2026-05-15.20", date: "2026-05-15", changes: [
     "**Pantry tab: category filter dropdown.** New `<select>` styled as a pill sits inside the existing filter row (right of the All/Expiring/Low/Khalil/Out buttons), composing with them and the text search via AND. Options are sourced live from `[...new Set(pantry.map(p=>p.category))].sort()` — no hardcoded taxonomy, so new categories appear automatically as receipts add items. Each option shows the count for that category. Items missing a `category` field bucket under 'uncategorised'. Selecting a non-`all` value lights the pill (same `data-active` pattern as the buttons).",
     "**Stats tab: 'Pantry composition & health' Section.** New section between Workflow integrity and Audience breakdown. Three KPI stats at the top (Categories tracked / In-stock items / Categories <50% avg confidence), then two row-bar tables. (1) Composition: each category's item count, share of in-stock pantry, and a stone-grey bar — sorted by count descending. (2) Confidence health: each category's avg confidence (decay-aware, uses `Bar`'s standard green/amber/red thresholds) and count of items expiring in ≤5 days (amber-bold when >0). Out-of-stock items excluded from all metrics — they're not really in the pantry until restored, so including them would mask which categories are at risk.",
@@ -3146,7 +3151,7 @@ function ReceiptParser(){
   </Section>;
 }
 
-function OrdersView(){
+function OrdersView({pantry}){
   // Receipts now come from Supabase via ReceiptsContext (commit 14.3).
   // The shape matches what RAW.tesco_orders used to provide — items[]
   // with name/section/status/total_price_gbp — so all downstream logic
@@ -3154,11 +3159,19 @@ function OrdersView(){
   // (fetchReceipts already orders by delivery_date.asc, but ContextValue
   // could in principle be reordered).
   const receipts = useContext(ReceiptsContext);
+  // skuIndex bridges receipt line items → pantry items (and therefore pantry
+  // categories). Used by the "Spend by pantry category" section below.
+  const skuIndex = useContext(TescoSkusContext);
   const orders = useMemo(
     () => (receipts || []).slice().sort((a,b) => (a.delivery_date||"").localeCompare(b.delivery_date||"")),
     [receipts]
   );
   const [expanded, setExpanded] = useState(null);
+  // Timeframe filter for "Spend by pantry category". Three options:
+  // "all" (every receipt — matches the spend chart), "90d", "30d". 30d/90d
+  // are rolling windows ending today, not calendar months. Default "all"
+  // because the household has 13 receipts of history and 30d may be sparse.
+  const [spendCatWindow, setSpendCatWindow] = useState("all");
 
   const stats = useMemo(()=>{
     if (!orders.length) return null;
@@ -3222,6 +3235,94 @@ function OrdersView(){
       avgSpend: totalSpend / orders.length,
     };
   }, [orders]);
+
+  // Spend by pantry category. Joins receipt line items → pantry categories
+  // via the SKU index, then aggregates total_price_gbp per category, filtered
+  // by spendCatWindow. Kept as a separate useMemo from `stats` because
+  // spendCatWindow toggles user-driven — recomputing all of stats on every
+  // toggle would be wasteful.
+  //
+  // Join strategy:
+  //   1. lookupSku(item.name, skuIndex) → SKU row → basket_key (canonical key)
+  //   2. basket_key → pantry item by exact match on lowercased pantry.item
+  //   3. pantry item → pantry.category
+  // Any step failing → "uncategorised" bucket. The bucket is always rendered
+  // last regardless of spend so it's easy to read the categorised stack first.
+  //
+  // Spend per line: total_price_gbp if present, else unit_price_gbp × qty,
+  // else skip (no price = no spend, not a £0 line). Only `purchased` items
+  // count — unavailable lines have no actual spend even when priced.
+  const spendByPantryCategory = useMemo(() => {
+    if (!orders.length) return {rows: [], totalSpend: 0, matchedPct: 0, totalLines: 0, matchedLines: 0};
+
+    // Build pantry-item → category lookup, lowercased keys for case-insensitive match.
+    const pantryCatByItem = new Map();
+    (pantry || []).forEach(p => {
+      if (p && p.item) {
+        pantryCatByItem.set(String(p.item).toLowerCase().trim(), p.category || "uncategorised");
+      }
+    });
+
+    // Timeframe cutoff. 30d/90d are rolling windows from today.
+    let cutoff = null;
+    if (spendCatWindow === "30d" || spendCatWindow === "90d") {
+      const days = spendCatWindow === "30d" ? 30 : 90;
+      const c = new Date();
+      c.setDate(c.getDate() - days);
+      cutoff = c.toISOString().slice(0, 10); // YYYY-MM-DD
+    }
+
+    const byCat = new Map();
+    let totalSpend = 0;
+    let totalLines = 0;
+    let matchedLines = 0;
+
+    for (const o of orders) {
+      if (cutoff && (o.delivery_date || "") < cutoff) continue;
+      for (const it of o.items || []) {
+        if (it.status === "unavailable") continue;
+        // Derive line spend
+        let spend = it.total_price_gbp;
+        if (spend == null && it.unit_price_gbp != null && it.qty != null) {
+          spend = it.unit_price_gbp * it.qty;
+        }
+        if (spend == null) continue;
+
+        totalLines += 1;
+
+        // Resolve receipt name → SKU → basket_key → pantry category
+        let cat = "uncategorised";
+        const sku = lookupSku(it.name, skuIndex);
+        if (sku && sku.basket_key) {
+          const pantryCat = pantryCatByItem.get(String(sku.basket_key).toLowerCase().trim());
+          if (pantryCat) {
+            cat = pantryCat;
+            matchedLines += 1;
+          }
+        }
+
+        byCat.set(cat, (byCat.get(cat) || 0) + spend);
+        totalSpend += spend;
+      }
+    }
+
+    // Sort by spend desc; force "uncategorised" to the bottom regardless of size.
+    const rows = [...byCat.entries()]
+      .map(([category, spend]) => ({category, spend, sharePct: totalSpend ? Math.round(100 * spend / totalSpend) : 0}))
+      .sort((a, b) => {
+        if (a.category === "uncategorised" && b.category !== "uncategorised") return 1;
+        if (b.category === "uncategorised" && a.category !== "uncategorised") return -1;
+        return b.spend - a.spend;
+      });
+
+    return {
+      rows,
+      totalSpend,
+      matchedPct: totalLines ? Math.round(100 * matchedLines / totalLines) : 0,
+      totalLines,
+      matchedLines,
+    };
+  }, [orders, pantry, skuIndex, spendCatWindow]);
 
   if (!orders.length) {
     return <div className="space-y-4">
@@ -3311,6 +3412,44 @@ function OrdersView(){
           <div className="mono text-xs w-16 text-right">£{v.toFixed(0)}</div>
         </div>)}
       </div>
+    </Section>
+
+    <Section title="Spend by pantry category" subtitle="Receipt items joined to pantry categories via the SKU index"
+      tip="Same spend total as the aisle view, but cut by your pantry's category taxonomy (protein, produce, dry-goods, etc.) rather than Tesco's. Items that don't resolve to a pantry category are bucketed as 'uncategorised' at the bottom — these are usually one-off or unfamiliar items not yet in the pantry. Use the toggle to scope to recent shops.">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-3 text-sm">
+        <div className="flex items-center gap-2">
+          <span className="text-stone-500">Window:</span>
+          <div className="flex gap-1">
+            {[["all", "All time"], ["90d", "Last 90 days"], ["30d", "Last 30 days"]].map(([k, label]) => (
+              <button key={k} onClick={() => setSpendCatWindow(k)}
+                className="pill" data-active={spendCatWindow === k ? "" : undefined}
+                title={`Aggregate spend over ${label.toLowerCase()}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="text-xs text-stone-500 mono">
+          £{spendByPantryCategory.totalSpend.toFixed(0)} across {spendByPantryCategory.totalLines} lines · {spendByPantryCategory.matchedPct}% matched to pantry
+        </div>
+      </div>
+      {spendByPantryCategory.rows.length === 0
+        ? <div className="text-sm text-stone-500">No purchased lines in this window.</div>
+        : (() => {
+            const maxCat = Math.max(...spendByPantryCategory.rows.map(r => r.spend), 1);
+            return <div className="space-y-1.5">
+              {spendByPantryCategory.rows.map(r => <div key={r.category} className="flex items-center gap-3">
+                <div className="w-32 text-sm shrink-0">{r.category}</div>
+                <div className="flex-1 bg-stone-100 rounded-full h-5 overflow-hidden">
+                  <div className={r.category === "uncategorised" ? "bg-stone-400 h-full" : "bg-teal-700 h-full"}
+                       style={{width: `${(r.spend/maxCat)*100}%`}}/>
+                </div>
+                <div className="mono text-xs w-10 text-right text-stone-500">{r.sharePct}%</div>
+                <div className="mono text-xs w-16 text-right">£{r.spend.toFixed(0)}</div>
+              </div>)}
+            </div>;
+          })()
+      }
     </Section>
 
     <Section title="Repeat-purchase patterns" subtitle={`${stats.trends.filter(t=>t.count>=2).length} items bought across 2+ orders`}
@@ -5482,7 +5621,7 @@ function App(){
     {tab==="planner" && <PlannerView pantry={pantry} outOfStock={outOfStock} cooked={cooked}/>}
     {tab==="recipes" && <RecipesView pantry={pantry} outOfStock={outOfStock} cooked={cooked} addCooked={addCooked} eaterFilter={eaterFilter} setEaterFilter={setEaterFilter} cookedSyncErrors={cookedSyncErrors}/>}
     {tab==="pantry" && <PantryView pantry={pantry} outOfStock={outOfStock} toggleOutOfStock={toggleOutOfStock} qtyAdjustments={qtyAdjustments} adjustQty={adjustQty} syncErrors={syncErrors}/>}
-    {tab==="tesco" && <OrdersView/>}
+    {tab==="tesco" && <OrdersView pantry={pantry}/>}
     {tab==="gaps" && <GapsView pantry={pantry} outOfStock={outOfStock}/>}
     {tab==="audit" && <AuditView pantry={pantry} cooked={cooked} outOfStock={outOfStock}/>}
 
