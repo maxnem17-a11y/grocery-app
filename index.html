@@ -108,6 +108,16 @@ const { useState, useMemo, useEffect, useCallback, useRef, createContext, useCon
 const SITE_VERSION = "2026-05-14.16";
 const SITE_CHANGELOG = [
   // newest first
+  { version: "2026-05-15.2", date: "2026-05-15", changes: [
+    "**Orders tab: 'Save to archive' replaces 'Copy JSON' as the primary action.** The parser preview now writes directly to Supabase via a new Edge Function (`ingest-receipt`), eliminating the copy-paste-into-Claude-session step. One-tap save: drop a receipt → parse preview → click Save → row appears in the history below. Copy JSON is still available as a secondary button for backfill, debugging, or sharing.",
+    "**Edge Function: `ingest-receipt` (thin HTTP write API).** Deployed at `/functions/v1/ingest-receipt`. Does NOT parse — parsers stay wherever they make sense per caller (in-browser JS for the dashboard, server-side Python for the grocery-receipt-archive skill, eventually server-side TS for an email-forwarding webhook). The function is the single canonical write path that all of them call. Validates the order payload, dedupes by `(retailer, order_number)`, inserts the receipt header + line items, returns `{ status: \"saved\" | \"duplicate\" | \"error\" }`.",
+    "**Why a function rather than direct PostgREST writes from the dashboard.** Two reasons: (1) When other retailers come online (Ocado, Sainsbury's, Waitrose all already in the function's allowlist), they all hit the same insert/dedupe path — no chance of one retailer's dashboard code drifting from another's. (2) If we ever add email-forwarding ingest (Option B from an earlier conversation), the inbound-email webhook calls the same endpoint as the dashboard. The function becomes the asset that pays off across multiple callers. The dashboard is the first caller; the JS parser stays in-browser for instant preview.",
+    "**Auth: two layers.** (1) `verify_jwt: true` at the platform level — requires a valid Supabase JWT in the Authorization header; the dashboard's anon key satisfies this with no extra wiring. (2) Custom `X-Ingest-Secret` header checked inside the function body — blocks drive-by callers who only have the anon key. The secret is visible in the dashboard source (single-user tool, not a real secret) but raises the bar against random scraping.",
+    "**DB hardening: unique index on `(retailer, order_number)`.** Defense in depth — the function checks for duplicates before insert, but the index catches concurrent writes and any future write path that forgets to dedupe. Partial index excludes NULL order_numbers (some early manual entries may not have one). Pre-existing index on `(source, order_number)` left in place — `source` is the ingestion channel (manual / tesco_email / ocado_email) while `retailer` is the semantic identity; both keys are reasonable but `(retailer, order_number)` is the right one going forward.",
+    "**New React context: `ReceiptsRefreshContext`.** Exposes `refresh()` and `localAppend()` to components that mutate receipts (currently just ReceiptParser). Kept separate from the existing `ReceiptsContext` so the 3 existing consumers (OrdersView, PlannerView, GapsView) don't change. On successful save, the dashboard does an optimistic local append (so the new order is visible immediately) then refetches in the background as a consistency check.",
+    "**Save UX states.** Idle → Saving → one of {Saved, Already in archive, Save failed}. Each terminal state renders an inline coloured banner with the relevant detail (item count for saved, existing delivery date for duplicate, error code + message for failure). Save button disabled while saving and after a successful save (re-enabled when a new file is dropped). Save also disabled when `parse_quality === 'no_items_found'` since there's nothing meaningful to save.",
+    "**Decision log (recorded mid-session, summary).** Considered three options: (A) direct dashboard write with anon key, (B) email-forwarding auto-ingest, (C) Edge Function as write API with in-browser parser. Initially leaned toward (A) for simplicity, then (B) was raised, then debated (B) vs (A) vs (C). Settled on (C) because: parser-in-function would have duplicated the 486-line Python parser as TypeScript (rejected); but a *thin write API* with parsers staying where they are gets the multi-retailer benefit + future email-webhook compatibility for ~80 lines of TS instead of 500+. Option B remains a viable future addition that hits the same endpoint.",
+  ]},
   { version: "2026-05-15.1", date: "2026-05-15", changes: [
     "**Orders tab: Spend-over-time chart now has a Per order / Timeline toggle.** The original bar chart squashed all 13 orders into evenly-spaced bars, which hid the actual rhythm of shopping — a 2-day gap and a 2-month gap looked identical. Added a small toggle above the chart: 'Per order' keeps the existing view; 'Timeline' positions each bar on a true date axis with month tick labels along the bottom edge. Gaps longer than 45 days between consecutive deliveries are shaded amber with a 'Nd gap' label, so the long lapses (e.g. Jul → Oct 2025, ~62 days; Jan → Apr 2026, ~73 days) are immediately visible. Toggle defaults to 'Per order' to preserve the previous look.",
     "**Order history and Repeat-purchase patterns sections now collapsible, default closed.** Both sections are heavy — order history renders 13 expandable receipt cards (each with a 27-row item table when opened), and repeat-purchase shows a 30-card grid. They dominated the Orders tab on first paint and pushed the more useful summary sections (Spend by aisle, Khalil allergen exposure) below the fold. Now both render collapsed by default — click the header to expand. Section component already supported this pattern (added in earlier commit for the Recipe Library tabs); this is just opting the two heavy Orders sections in.",
@@ -324,6 +334,41 @@ const SUPABASE = {
   anonKey: "sb_publishable_F3K2WRXKHrr4ShwQg971OA_2kvegwp7",
 };
 
+// Shared secret for the ingest-receipt Edge Function. NOT a real secret — the
+// dashboard source is visible to anyone who opens it. It raises the bar against
+// drive-by callers who only have the anon key. To rotate: edit the constant
+// in supabase/functions/ingest-receipt/index.ts AND this value, then redeploy
+// the function. The Edge Function also enforces a JWT check via verify_jwt=true
+// — the anon key satisfies it, so no extra wiring needed in the client.
+const INGEST_SECRET = "f07caca7c07e77ece835138a152ffa8c";
+const INGEST_URL = `${SUPABASE.url}/functions/v1/ingest-receipt`;
+
+// POST a parsed order to the ingest-receipt function. Returns one of:
+//   { status: "saved",     receipt_id, items_inserted }
+//   { status: "duplicate", existing_id, existing_delivery_date }
+//   { status: "error",     code, message? }
+// Network failures surface as { status: "error", code: "network", message }.
+async function ingestReceipt({ retailer, order }) {
+  try {
+    const res = await fetch(INGEST_URL, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${SUPABASE.anonKey}`,
+        "X-Ingest-Secret": INGEST_SECRET,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ retailer, order }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok && !json.status) {
+      return { status: "error", code: "http_" + res.status, message: `HTTP ${res.status}` };
+    }
+    return json;
+  } catch (e) {
+    return { status: "error", code: "network", message: e.message || String(e) };
+  }
+}
+
 // ============================================================
 // TODO(migrate-to-supabase): the following are still embedded
 // in the <script id="raw-data"> block by design:
@@ -347,6 +392,14 @@ const TODAY = (() => {
 // before the boot effect completes; loading is signalled separately via
 // the App's loading state.
 const ReceiptsContext = createContext([]);
+// Companion context exposing a refresh() function and a localAppend() helper
+// for components that mutate receipts (currently just ReceiptParser → Save to
+// archive). Kept separate so the 3 existing consumers of ReceiptsContext don't
+// need to be touched. App.jsx wires both providers.
+const ReceiptsRefreshContext = createContext({
+  refresh:     async () => {},
+  localAppend: () => {},
+});
 
 // ===== Allergens context =====
 // Household allergen tokens (Khalil block/uncertain/safe + Max + Emily)
@@ -2572,6 +2625,12 @@ function ReceiptParser(){
   const [fileName, setFileName] = useState(null);
   const [showJson, setShowJson] = useState(false);
   const [copiedTick, setCopiedTick] = useState(false);
+  // Save-to-archive state. Idle until user clicks; transitions to saving →
+  // saved / duplicate / error. Persisted in the component so a successful
+  // save stays visible after the parser preview is dismissed via a new file.
+  const [saveState, setSaveState] = useState("idle"); // idle | saving | saved | duplicate | error
+  const [saveResult, setSaveResult] = useState(null); // { receipt_id?, existing_id?, existing_delivery_date?, message? }
+  const { refresh: refreshReceipts, localAppend: localAppendReceipt } = useContext(ReceiptsRefreshContext);
   const inputRef = useRef(null);
 
   const handleFile = useCallback(async (file) => {
@@ -2581,6 +2640,8 @@ function ReceiptParser(){
     setParsed(null);
     setFileName(file.name);
     setShowJson(false);
+    setSaveState("idle");
+    setSaveResult(null);
     try {
       let text;
       const lower = file.name.toLowerCase();
@@ -2637,9 +2698,36 @@ function ReceiptParser(){
     }
   };
 
-  return <Section title="Add receipt" subtitle="Parse a Tesco .eml or .pdf receipt — preview only"
+  // Save the parsed order to Supabase via the ingest-receipt Edge Function.
+  // The function dedupes by (retailer, order_number) and handles the writes
+  // atomically — we just POST and react to the response.
+  const saveToArchive = async () => {
+    if (!parsed) return;
+    setSaveState("saving");
+    setSaveResult(null);
+    const result = await ingestReceipt({
+      retailer: parsed.retailer || "tesco",
+      order: parsed,
+    });
+    if (result.status === "saved") {
+      setSaveState("saved");
+      setSaveResult(result);
+      // Optimistic local-append so the new order appears in OrdersView
+      // immediately. Then refetch in the background as a consistency check.
+      localAppendReceipt(parsed, result.receipt_id);
+      refreshReceipts();
+    } else if (result.status === "duplicate") {
+      setSaveState("duplicate");
+      setSaveResult(result);
+    } else {
+      setSaveState("error");
+      setSaveResult(result);
+    }
+  };
+
+  return <Section title="Add receipt" subtitle="Parse a Tesco .eml or .pdf receipt and save to the archive"
     collapsible defaultOpen={false}
-    tip="Drop a Tesco receipt (.eml email export or .pdf invoice) here to extract items, total, and Khalil-allergen flags. This is a preview — the parsed order is not written to the archive automatically. Use the 'Copy JSON' button to paste it into a Claude session for permanent storage.">
+    tip="Drop a Tesco receipt (.eml email export or .pdf invoice) here to extract items, total, and Khalil-allergen flags. Click 'Save to archive' to persist it directly to Supabase — the order will appear in the history below immediately. The ingest endpoint dedupes by order number, so re-uploading the same receipt is safe.">
 
     <div onDrop={onDrop} onDragOver={onDragOver}
          className="border-2 border-dashed border-stone-300 rounded-lg p-4 text-center bg-stone-50/50 hover:bg-stone-50 transition-colors">
@@ -2738,27 +2826,65 @@ function ReceiptParser(){
           </div>
         </details>
 
-        {/* JSON output + copy */}
+        {/* Save to archive — primary action */}
         <div className="card p-3 bg-stone-50">
           <div className="flex items-baseline justify-between mb-2 flex-wrap gap-2">
-            <div className="text-sm font-medium">Order JSON</div>
-            <div className="flex items-center gap-2">
+            <div className="text-sm font-medium">Save to archive</div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <button onClick={saveToArchive}
+                      disabled={saveState === "saving" || saveState === "saved" || saveState === "duplicate" || parsed.parse_quality === "no_items_found"}
+                      title={parsed.parse_quality === "no_items_found"
+                        ? "Can't save — no items were extracted. Try a different copy of the receipt."
+                        : "Save this order directly to Supabase via the ingest-receipt Edge Function"}
+                      className={"text-xs px-3 py-1 rounded border " +
+                        (saveState === "saved"
+                          ? "border-emerald-700 bg-emerald-700 text-white"
+                          : saveState === "duplicate"
+                          ? "border-amber-700 bg-amber-50 text-amber-800"
+                          : saveState === "error"
+                          ? "border-rose-700 bg-rose-50 text-rose-800"
+                          : saveState === "saving"
+                          ? "border-stone-400 bg-stone-200 text-stone-600 cursor-wait"
+                          : "border-teal-700 bg-teal-700 text-white hover:bg-teal-800") +
+                        (parsed.parse_quality === "no_items_found" ? " opacity-50 cursor-not-allowed" : "")}>
+                {saveState === "saving"    ? "Saving…"
+                 : saveState === "saved"   ? "✓ Saved to archive"
+                 : saveState === "duplicate" ? "Already in archive"
+                 : saveState === "error"   ? "Save failed — retry"
+                 : "💾 Save to archive"}
+              </button>
               <button onClick={() => setShowJson(s => !s)}
                       className="text-xs px-2 py-1 rounded border border-stone-300 bg-white hover:bg-stone-100">
-                {showJson ? "Hide" : "Show"}
+                {showJson ? "Hide JSON" : "Show JSON"}
               </button>
               <button onClick={copyJson}
-                      className="text-xs px-2 py-1 rounded border border-teal-700 bg-teal-700 text-white hover:bg-teal-800">
-                {copiedTick ? "Copied ✓" : "Copy JSON"}
+                      title="Copy the order JSON to clipboard (useful for skill-based backfill or debugging)"
+                      className="text-xs px-2 py-1 rounded border border-stone-300 bg-white hover:bg-stone-100">
+                {copiedTick ? "Copied ✓" : "📋 Copy"}
               </button>
             </div>
           </div>
-          {showJson && (
-            <pre className="text-[10px] mono bg-white border border-stone-200 rounded p-2 max-h-64 overflow-auto whitespace-pre-wrap">{jsonBlob}</pre>
+
+          {/* Save result feedback */}
+          {saveState === "saved" && saveResult && (
+            <div className="text-[11px] bg-emerald-50 border border-emerald-200 text-emerald-800 rounded px-2 py-1.5 mt-1">
+              Inserted {saveResult.items_inserted ?? 0} line items. The order is now in the history below.
+            </div>
           )}
-          <div className="text-[11px] text-stone-600 mt-2">
-            <strong>Preview only.</strong> To add this to your canonical archive, paste this JSON into a fresh Claude session and ask: <em>"append this Tesco order to orders.json"</em>. The skill will dedupe by <span className="mono">order_number</span>, re-sort, and persist to Supabase.
-          </div>
+          {saveState === "duplicate" && saveResult && (
+            <div className="text-[11px] bg-amber-50 border border-amber-200 text-amber-800 rounded px-2 py-1.5 mt-1">
+              This order is already in the archive (saved {saveResult.existing_delivery_date ? formatDate(saveResult.existing_delivery_date) : "previously"}). Nothing was changed.
+            </div>
+          )}
+          {saveState === "error" && saveResult && (
+            <div className="text-[11px] bg-rose-50 border border-rose-200 text-rose-800 rounded px-2 py-1.5 mt-1">
+              <strong>{saveResult.code || "error"}:</strong> {saveResult.message || "Unknown failure."} {saveResult.code === "network" && "Check your connection and try again."}
+            </div>
+          )}
+
+          {showJson && (
+            <pre className="text-[10px] mono bg-white border border-stone-200 rounded p-2 max-h-64 overflow-auto whitespace-pre-wrap mt-2">{jsonBlob}</pre>
+          )}
         </div>
       </div>
     )}
@@ -2855,9 +2981,9 @@ function OrdersView(){
 
   return <div className="space-y-5">
     <div className="text-xs text-stone-600 bg-stone-50 border border-stone-200 rounded-lg px-3 py-2">
-      <strong>Read-only history.</strong> {orders.length} Tesco orders parsed from receipt emails between {formatDate(orders[0].delivery_date)} and {formatDate(orders[orders.length-1].delivery_date)}.
-      Useful for spotting patterns (what you buy regularly), tracking Khalil's allergen exposure across past deliveries, and reviewing substitutions.
-      The history can't be edited in-app — to add a new order permanently, parse it below to preview, then paste the JSON into a Claude session.
+      <strong>Order history.</strong> {orders.length} Tesco orders between {formatDate(orders[0].delivery_date)} and {formatDate(orders[orders.length-1].delivery_date)}.
+      Useful for spotting patterns, tracking Khalil's allergen exposure across past deliveries, and reviewing substitutions.
+      To add a new order, drop the receipt into the parser below and click <strong>Save to archive</strong>.
     </div>
     <ReceiptParser/>
     <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
@@ -3912,6 +4038,31 @@ function App(){
   // the context; the price-index / cadence / gap-analysis helpers take
   // receipts as a parameter (commit 14.4).
   const [receipts, setReceipts] = useState([]);
+  // Re-fetch receipts from Supabase. Used by ReceiptParser → Save to archive
+  // to surface a newly-inserted order immediately. Errors are logged but not
+  // surfaced — the optimistic local-append (below) already showed the row.
+  const refreshReceipts = useCallback(async () => {
+    try {
+      const rows = await fetchReceipts();
+      setReceipts((rows || []).map(mapReceiptRow));
+    } catch (e) {
+      console.warn("refreshReceipts failed:", e);
+    }
+  }, []);
+  // Optimistic append. The Edge Function already inserted the row server-side;
+  // this just makes it visible in OrdersView, PlannerView, GapsView without
+  // waiting for the network round-trip of a refetch. Shape must match
+  // mapReceiptRow's output (snake_case → consumed by ordersView etc.).
+  const localAppendReceipt = useCallback((order, newId) => {
+    if (!order) return;
+    setReceipts(prev => [...prev, {
+      ...order,
+      id: newId,
+      // mapReceiptRow normally injects these — keep parity
+      retailer: order.retailer || "tesco",
+      items: order.items || [],
+    }].sort((a, b) => (a.delivery_date || "").localeCompare(b.delivery_date || "")));
+  }, []);
   // Household allergens (Khalil/Max/Emily token lists). Fetched from the
   // household_allergens Supabase table on boot (commit 14.5). Default is
   // EMPTY_ALLERGENS so flagsForRecipe and khalilAllergenFlag degrade
@@ -4386,6 +4537,7 @@ function App(){
   }
 
   return <ReceiptsContext.Provider value={receipts}>
+  <ReceiptsRefreshContext.Provider value={{ refresh: refreshReceipts, localAppend: localAppendReceipt }}>
   <AllergensContext.Provider value={allergens}>
   <TescoSkusContext.Provider value={skuIndex}>
   <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-10">
@@ -4450,6 +4602,7 @@ function App(){
   </div>
   </TescoSkusContext.Provider>
   </AllergensContext.Provider>
+  </ReceiptsRefreshContext.Provider>
   </ReceiptsContext.Provider>;
 }
 
