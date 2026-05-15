@@ -93,7 +93,7 @@
   .legend-strip{ font-size:.7rem; color:#6b7280; }
   .legend-strip .lkey{ display:inline-flex; align-items:center; gap:.3rem; margin-right:.9rem; white-space:nowrap; }
   .legend-strip .lkey .sw{ width:8px; height:8px; border-radius:2px; display:inline-block; }
-  .tab-subtitle{ font-size:.75rem; color:#6b7280; margin-top:.5rem; margin-bottom:1rem; line-height:1.4; padding:0 .25rem; }
+  .tab-subtitle{ font-size:.75rem; color:#6b7280; margin-top:.5rem; margin-bottom:1.5rem; line-height:1.4; padding:0 .25rem; }
 </style>
 </head>
 <body>
@@ -3128,9 +3128,6 @@ function OrdersView(){
   const maxSection = Math.max(...stats.sectionTotals.map(([,v])=>v), 1);
 
   return <div className="space-y-5">
-    <div className="text-xs text-stone-600 bg-stone-50 border border-stone-200 rounded-lg px-3 py-2">
-      {orders.length} orders between {formatDate(orders[0].delivery_date)} and {formatDate(orders[orders.length-1].delivery_date)}. To add a new order, drop the receipt into the parser below and click <strong>Save to archive</strong>.
-    </div>
     <ReceiptParser/>
     <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
       <KV label="Orders" value={orders.length} sub={`${formatDate(orders[0].delivery_date)} → ${formatDate(orders[orders.length-1].delivery_date)}`}/>
@@ -4316,7 +4313,7 @@ function LarderBrand({ pantry, receipts, showHelpBanner, onShowHelp }) {
   else deliveryLine = "Delivery overdue";
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 mb-6 pb-4 border-b border-stone-200">
+    <div className="flex flex-wrap items-center justify-between gap-3 mb-3 pb-4 border-b border-stone-200">
       <div className="flex items-center gap-3">
         {style === "modern" ? renderModernJar() : renderRetroJar()}
         <div>
@@ -4349,7 +4346,7 @@ function LarderBrand({ pantry, receipts, showHelpBanner, onShowHelp }) {
 // ============================================================================
 function LarderFooter() {
   return (
-    <footer className="mt-12 pt-8 pb-6 text-center border-t border-stone-200">
+    <footer className="pb-6 text-center">
       <p className="text-stone-400 text-sm tracking-wide"
          style={{ fontFamily: "Georgia, 'Times New Roman', serif", fontStyle: "italic" }}>
         What's in your kitchen?
