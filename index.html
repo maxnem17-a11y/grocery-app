@@ -110,9 +110,15 @@ const { useState, useMemo, useEffect, useCallback, useRef, createContext, useCon
 // (2) only apply changes not already listed, (3) append a new
 // entry below describing what they changed.
 // ============================================================
-const SITE_VERSION = "2026-05-15.13";
+const SITE_VERSION = "2026-05-15.15";
 const SITE_CHANGELOG = [
   // newest first
+  { version: "2026-05-15.15", date: "2026-05-15", changes: [
+    "**Cook tab retro icon swapped chef's hat → saucepan.** Chef's hat silhouette wasn't reading clearly at 16px — too easily mistaken for a mushroom. Replaced with a side-view saucepan: three vertical steam wisps at top, cream rim ring, terracotta body, thin dark handle extending right. Reads as cooking immediately and ties the palette together via the cream rim (matches the jar's two-tone fill).",
+  ]},
+  { version: "2026-05-15.14", date: "2026-05-15", changes: [
+    "**Retro tab icons tweaked.** Two changes: (1) Cook tab swapped from notebook → chef's hat — replaced again in v15 (see above) after testing at 16px. (2) Basket tab lost the plus badge and the basket itself was recentred from cols 0–10 to cols 1–14 — the plus was reading as noise at 16px and the off-centre placement looked unbalanced.",
+  ]},
   { version: "2026-05-15.13", date: "2026-05-15", changes: [
     "**Retro pixel-art tab icons shipped.** The TabIcon retro branch (placeholder/return-null until now) now renders 16×16 pixel-art icons for all six tabs: notebook (Cook), book (Recipes), jar (Pantry), basket-with-plus (Basket), parcel (Orders), bar-chart (Stats). Palette matches the existing retro jar: `#b9c660` olive bg / `#f0743c` terracotta / `#3e200c` outline / `#fcf0c8` cream. Each icon is a 16×16 SVG with `shape-rendering=crispEdges` and integer-coordinate rects — pixels stay sharp at display size, no anti-aliasing fuzz. Rect coordinates were hand-drawn on a 16×16 character grid and run-length-encoded for compactness (one bg rect + ~15-50 foreground rects per icon).",
     "**TabIcon function tidied.** The terminal `}}` on one line (switch + function close) was split to two lines for readability.",
@@ -4521,57 +4527,38 @@ function TabIcon({ kind }) {
     "aria-hidden": "true",
   };
   switch (kind) {
-    case "planner": // notebook
+    case "planner": // saucepan with steam
       return (
         <svg {...retroCommon}>
           <rect width="16" height="16" fill="#b9c660"/>
-          <rect x="4" y="1" width="10" height="1" fill="#3e200c"/>
+          <rect x="4" y="1" width="1" height="1" fill="#3e200c"/>
+          <rect x="8" y="1" width="1" height="1" fill="#3e200c"/>
           <rect x="3" y="2" width="1" height="1" fill="#3e200c"/>
-          <rect x="4" y="2" width="9" height="1" fill="#fcf0c8"/>
-          <rect x="13" y="2" width="1" height="1" fill="#3e200c"/>
-          <rect x="1" y="3" width="3" height="1" fill="#3e200c"/>
-          <rect x="4" y="3" width="9" height="1" fill="#fcf0c8"/>
-          <rect x="13" y="3" width="1" height="1" fill="#3e200c"/>
-          <rect x="1" y="4" width="1" height="1" fill="#3e200c"/>
-          <rect x="3" y="4" width="1" height="1" fill="#3e200c"/>
-          <rect x="4" y="4" width="1" height="1" fill="#fcf0c8"/>
-          <rect x="5" y="4" width="6" height="1" fill="#3e200c"/>
-          <rect x="11" y="4" width="2" height="1" fill="#fcf0c8"/>
-          <rect x="13" y="4" width="1" height="1" fill="#3e200c"/>
-          <rect x="1" y="5" width="1" height="1" fill="#3e200c"/>
-          <rect x="3" y="5" width="1" height="1" fill="#3e200c"/>
-          <rect x="4" y="5" width="9" height="1" fill="#fcf0c8"/>
-          <rect x="13" y="5" width="1" height="1" fill="#3e200c"/>
-          <rect x="1" y="6" width="3" height="1" fill="#3e200c"/>
-          <rect x="4" y="6" width="9" height="1" fill="#fcf0c8"/>
-          <rect x="13" y="6" width="1" height="1" fill="#3e200c"/>
+          <rect x="5" y="2" width="1" height="1" fill="#3e200c"/>
+          <rect x="7" y="2" width="1" height="1" fill="#3e200c"/>
+          <rect x="9" y="2" width="1" height="1" fill="#3e200c"/>
+          <rect x="3" y="3" width="1" height="1" fill="#3e200c"/>
+          <rect x="5" y="3" width="1" height="1" fill="#3e200c"/>
+          <rect x="7" y="3" width="1" height="1" fill="#3e200c"/>
+          <rect x="4" y="4" width="1" height="1" fill="#3e200c"/>
+          <rect x="7" y="4" width="1" height="1" fill="#3e200c"/>
+          <rect x="1" y="6" width="11" height="1" fill="#3e200c"/>
           <rect x="1" y="7" width="1" height="1" fill="#3e200c"/>
-          <rect x="3" y="7" width="1" height="1" fill="#3e200c"/>
-          <rect x="4" y="7" width="1" height="1" fill="#fcf0c8"/>
-          <rect x="5" y="7" width="6" height="1" fill="#3e200c"/>
-          <rect x="11" y="7" width="2" height="1" fill="#fcf0c8"/>
-          <rect x="13" y="7" width="1" height="1" fill="#3e200c"/>
+          <rect x="2" y="7" width="9" height="1" fill="#fcf0c8"/>
+          <rect x="11" y="7" width="1" height="1" fill="#3e200c"/>
           <rect x="1" y="8" width="1" height="1" fill="#3e200c"/>
-          <rect x="3" y="8" width="1" height="1" fill="#3e200c"/>
-          <rect x="4" y="8" width="9" height="1" fill="#fcf0c8"/>
-          <rect x="13" y="8" width="1" height="1" fill="#3e200c"/>
-          <rect x="1" y="9" width="3" height="1" fill="#3e200c"/>
-          <rect x="4" y="9" width="9" height="1" fill="#fcf0c8"/>
-          <rect x="13" y="9" width="1" height="1" fill="#3e200c"/>
+          <rect x="2" y="8" width="9" height="1" fill="#f0743c"/>
+          <rect x="11" y="8" width="5" height="1" fill="#3e200c"/>
+          <rect x="1" y="9" width="1" height="1" fill="#3e200c"/>
+          <rect x="2" y="9" width="9" height="1" fill="#f0743c"/>
+          <rect x="11" y="9" width="5" height="1" fill="#3e200c"/>
           <rect x="1" y="10" width="1" height="1" fill="#3e200c"/>
-          <rect x="3" y="10" width="1" height="1" fill="#3e200c"/>
-          <rect x="4" y="10" width="1" height="1" fill="#fcf0c8"/>
-          <rect x="5" y="10" width="5" height="1" fill="#3e200c"/>
-          <rect x="10" y="10" width="3" height="1" fill="#fcf0c8"/>
-          <rect x="13" y="10" width="1" height="1" fill="#3e200c"/>
+          <rect x="2" y="10" width="9" height="1" fill="#f0743c"/>
+          <rect x="11" y="10" width="1" height="1" fill="#3e200c"/>
           <rect x="1" y="11" width="1" height="1" fill="#3e200c"/>
-          <rect x="3" y="11" width="1" height="1" fill="#3e200c"/>
-          <rect x="4" y="11" width="9" height="1" fill="#fcf0c8"/>
-          <rect x="13" y="11" width="1" height="1" fill="#3e200c"/>
-          <rect x="1" y="12" width="3" height="1" fill="#3e200c"/>
-          <rect x="4" y="12" width="9" height="1" fill="#fcf0c8"/>
-          <rect x="13" y="12" width="1" height="1" fill="#3e200c"/>
-          <rect x="3" y="13" width="11" height="1" fill="#3e200c"/>
+          <rect x="2" y="11" width="9" height="1" fill="#f0743c"/>
+          <rect x="11" y="11" width="1" height="1" fill="#3e200c"/>
+          <rect x="2" y="12" width="9" height="1" fill="#3e200c"/>
         </svg>
       );
     case "recipes": // book
@@ -4686,20 +4673,19 @@ function TabIcon({ kind }) {
       return (
         <svg {...retroCommon}>
           <rect width="16" height="16" fill="#b9c660"/>
-          <rect x="12" y="1" width="1" height="1" fill="#3e200c"/>
-          <rect x="12" y="2" width="1" height="1" fill="#3e200c"/>
-          <rect x="10" y="3" width="5" height="1" fill="#3e200c"/>
-          <rect x="3" y="4" width="3" height="1" fill="#3e200c"/>
+          <rect x="6" y="2" width="4" height="1" fill="#3e200c"/>
+          <rect x="4" y="3" width="2" height="1" fill="#3e200c"/>
+          <rect x="10" y="3" width="2" height="1" fill="#3e200c"/>
+          <rect x="3" y="4" width="1" height="1" fill="#3e200c"/>
           <rect x="12" y="4" width="1" height="1" fill="#3e200c"/>
           <rect x="2" y="5" width="1" height="1" fill="#3e200c"/>
-          <rect x="6" y="5" width="1" height="1" fill="#3e200c"/>
-          <rect x="12" y="5" width="1" height="1" fill="#3e200c"/>
+          <rect x="13" y="5" width="1" height="1" fill="#3e200c"/>
           <rect x="2" y="6" width="1" height="1" fill="#3e200c"/>
-          <rect x="7" y="6" width="1" height="1" fill="#3e200c"/>
-          <rect x="1" y="7" width="11" height="1" fill="#3e200c"/>
+          <rect x="13" y="6" width="1" height="1" fill="#3e200c"/>
+          <rect x="1" y="7" width="14" height="1" fill="#3e200c"/>
           <rect x="1" y="8" width="1" height="1" fill="#3e200c"/>
-          <rect x="2" y="8" width="8" height="1" fill="#f0743c"/>
-          <rect x="10" y="8" width="1" height="1" fill="#3e200c"/>
+          <rect x="2" y="8" width="12" height="1" fill="#f0743c"/>
+          <rect x="14" y="8" width="1" height="1" fill="#3e200c"/>
           <rect x="1" y="9" width="1" height="1" fill="#3e200c"/>
           <rect x="2" y="9" width="1" height="1" fill="#f0743c"/>
           <rect x="3" y="9" width="1" height="1" fill="#3e200c"/>
@@ -4708,14 +4694,18 @@ function TabIcon({ kind }) {
           <rect x="6" y="9" width="1" height="1" fill="#f0743c"/>
           <rect x="7" y="9" width="1" height="1" fill="#3e200c"/>
           <rect x="8" y="9" width="1" height="1" fill="#f0743c"/>
-          <rect x="9" y="9" width="2" height="1" fill="#3e200c"/>
+          <rect x="9" y="9" width="1" height="1" fill="#3e200c"/>
+          <rect x="10" y="9" width="1" height="1" fill="#f0743c"/>
+          <rect x="11" y="9" width="1" height="1" fill="#3e200c"/>
+          <rect x="12" y="9" width="1" height="1" fill="#f0743c"/>
+          <rect x="13" y="9" width="2" height="1" fill="#3e200c"/>
           <rect x="1" y="10" width="1" height="1" fill="#3e200c"/>
-          <rect x="2" y="10" width="8" height="1" fill="#f0743c"/>
-          <rect x="10" y="10" width="1" height="1" fill="#3e200c"/>
+          <rect x="2" y="10" width="12" height="1" fill="#f0743c"/>
+          <rect x="14" y="10" width="1" height="1" fill="#3e200c"/>
           <rect x="1" y="11" width="1" height="1" fill="#3e200c"/>
-          <rect x="2" y="11" width="8" height="1" fill="#f0743c"/>
-          <rect x="10" y="11" width="1" height="1" fill="#3e200c"/>
-          <rect x="2" y="12" width="9" height="1" fill="#3e200c"/>
+          <rect x="2" y="11" width="12" height="1" fill="#f0743c"/>
+          <rect x="14" y="11" width="1" height="1" fill="#3e200c"/>
+          <rect x="2" y="12" width="12" height="1" fill="#3e200c"/>
         </svg>
       );
     case "tesco": // parcel
