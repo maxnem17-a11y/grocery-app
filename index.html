@@ -110,9 +110,15 @@ const { useState, useMemo, useEffect, useCallback, useRef, createContext, useCon
 // (2) only apply changes not already listed, (3) append a new
 // entry below describing what they changed.
 // ============================================================
-const SITE_VERSION = "2026-05-15.28";
+const SITE_VERSION = "2026-05-15.29";
 const SITE_CHANGELOG = [
   // newest first
+  { version: "2026-05-15.29", date: "2026-05-15", changes: [
+    "**Freezer action moved to Actions column, plus a corrected decay model.** The ❄️ button used to live as a leading icon inside the Item cell; it now sits next to the Out/Restore button on the right edge of the row, where the other per-row mutations live. Item cells get back the horizontal space they were lending to the icon, and the Actions column reads more honestly — it's where you go to mutate row state.",
+    "**Decay math: freezing stops the bleed, doesn't reverse it.** Previously, toggling ❄️ on a 3-day-old salmon at 60% freshness would jump the bar to ~89% — the slow frozen rate (5%/month) was retroactively applied to all days since purchase, effectively undoing fridge-time. That's not what 'putting it in the freezer' means. Fixed: `decayed()` now splits decay into two segments — pre-freeze days use the normal category rate (10%/day for protein etc.), post-freeze days use the frozen rate (5%/month). So freezing the same 3-day-old salmon today preserves whatever 60% it had at the moment of freezing, then decays slowly from there.",
+    "**New column: `frozen_at` (date, nullable).** Stamped with today's date when ❄️ is toggled on; cleared when toggled off. Lives on `public.pantry_items` next to `in_freezer`. PATCH writes both fields in a single round-trip. ALTER ran live via the Supabase MCP: `ALTER TABLE public.pantry_items ADD COLUMN IF NOT EXISTS frozen_at date;`.",
+    "**Backward-compatible fallback.** Rows where `_in_freezer` is true but `_frozen_at` is null (any pantry item that was frozen in v26–v28 before this column existed) fall back to the legacy whole-period frozen-rate calc. So existing frozen items keep displaying their inflated freshness until you toggle them off and back on (which stamps today as the new freeze date). Practical impact: nil — at this writing 0 items are flagged frozen anyway.",
+  ]},
   { version: "2026-05-15.28", date: "2026-05-15", changes: [
     "**Page numbers now save directly to Supabase, with edit affordance on the Recipes tab itself.** Two coordinated changes that close out the page-number editing flow first opened in v25.",
     "**1. Recipes tab — pencil icon on the source chip.** Book-sourced recipes show their page on the chip directly (e.g. `East · p.115` instead of just `East`). A small ✏️ button next to the chip swaps it for an inline `<input type=\"number\">`. Type the page, Tab or Enter to save, Esc to cancel. Works symmetrically for both adding a missing page and correcting an existing one — same affordance, same save path. Failures show a red dot ● next to the chip. Pencil only appears on book-typed sources (web/instagram recipes don't have page numbers).",
@@ -968,6 +974,12 @@ function mapPantryRow(row) {
     _out_of_stock: !!row.out_of_stock,
     _qty_adjustment: row.qty_adjustment || 0,
     _in_freezer: !!row.in_freezer,
+    // ISO date string (YYYY-MM-DD) of when the item was moved to the freezer.
+    // Used by decayed() to split decay into pre-freeze (normal rate) and
+    // post-freeze (frozen rate) segments — so freezing a 3-day-old salmon
+    // doesn't retroactively boost freshness; it just stops the bleed. Null
+    // when _in_freezer is false, or when the row predates this column.
+    _frozen_at: row.frozen_at || null,
   };
 }
 
@@ -1087,13 +1099,30 @@ function decayPerDay(category){
 }
 function decayed(item){
   const d = daysSince(item.purchased);
-  // _in_freezer is a manual override the user can set via the ❄️ toggle on
-  // the Pantry tab. When true, decay drops to the frozen-category rate
-  // (~5%/month) regardless of the item's stored category. Lets a fresh
-  // chicken that's been bagged and frozen stop bleeding 10% confidence per
-  // day without having to rewrite its category field.
-  const rate = item._in_freezer ? (5/30) : decayPerDay(item.category);
-  const v = (item.confidence ?? 90) - d * rate;
+  const baseRate = decayPerDay(item.category);
+  // Frozen-rate decay. The intuitive model: whatever freshness an item had
+  // at the moment of freezing is what's preserved, then it decays slowly
+  // from there. Math: pre-freeze loss = (frozen_at - purchased) * baseRate,
+  // post-freeze loss = (today - frozen_at) * frozenRate. Falls back to
+  // baseRate-since-purchase if we don't know when it was frozen (rows
+  // predating the frozen_at column, or pre-existing _in_freezer state on a
+  // browser session that hasn't synced yet).
+  if (item._in_freezer) {
+    const frozenRate = 5/30;
+    const frozenAt = item._frozen_at;
+    if (frozenAt) {
+      const daysBeforeFreeze = Math.max(0, daysSince(item.purchased) - daysSince(frozenAt));
+      const daysSinceFreeze = Math.max(0, daysSince(frozenAt));
+      const loss = daysBeforeFreeze * baseRate + daysSinceFreeze * frozenRate;
+      return Math.max(0, Math.round((item.confidence ?? 90) - loss));
+    }
+    // No frozen_at known — use the legacy whole-period frozen-rate calc.
+    // This is the v26/v27 behaviour and only applies to rows that haven't
+    // been re-toggled since the v29 frozen_at column was added.
+    const v = (item.confidence ?? 90) - d * frozenRate;
+    return Math.max(0, Math.round(v));
+  }
+  const v = (item.confidence ?? 90) - d * baseRate;
   return Math.max(0, Math.round(v));
 }
 function daysUntilExpiry(item){
@@ -1538,12 +1567,6 @@ function PantryView({pantry, outOfStock, toggleOutOfStock, inFreezer, toggleInFr
         {filtered.map((r,i)=> (
           <div key={r.item+i} className={`grid grid-cols-12 gap-2 items-center px-4 py-2 text-sm ${r._out?"opacity-40 line-through":""}`}>
             <div className="col-span-3 font-medium flex items-center gap-1.5" title={r.purchased ? `bought ${formatDate(r.purchased)}` : ""}>
-              <button
-                onClick={(e)=>{ e.stopPropagation(); toggleInFreezer(r.item); }}
-                className={`text-xs leading-none shrink-0 transition-opacity ${r._frozen ? "opacity-100" : "opacity-25 hover:opacity-60"}`}
-                title={r._frozen ? "In freezer — freshness decays slowly (~5%/month). Click to remove from freezer." : "Move to freezer — slows freshness decay to the frozen rate (~5%/month)."}
-                aria-label={r._frozen ? "Remove from freezer" : "Move to freezer"}
-              >❄️</button>
               <span className="truncate">{r.item}</span>
             </div>
             <div className="col-span-1 text-stone-500 text-xs truncate" title={r.category}>{r.category}</div>
@@ -1573,8 +1596,14 @@ function PantryView({pantry, outOfStock, toggleOutOfStock, inFreezer, toggleInFr
                 : r._flag==="check" ? <Chip tone="warn" title="May contain a Khalil allergen — check the product label">?</Chip>
                 : <Chip tone="ok" title="Safe for Khalil">✓</Chip>}
             </div>
-            <div className="col-span-1 text-right">
-              {r._syncErr && <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500 mr-1.5 align-middle" title={r._syncErr}></span>}
+            <div className="col-span-1 text-right flex items-center justify-end gap-1.5">
+              {r._syncErr && <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500 align-middle" title={r._syncErr}></span>}
+              <button
+                onClick={(e)=>{ e.stopPropagation(); toggleInFreezer(r.item); }}
+                className={`text-xs leading-none shrink-0 transition-opacity ${r._frozen ? "opacity-100" : "opacity-25 hover:opacity-60"}`}
+                title={r._frozen ? "In freezer — freshness decays slowly (~5%/month) from this point. Click to remove from freezer." : "Move to freezer — freshness stops decaying at today's level and starts decaying slowly (~5%/month) instead."}
+                aria-label={r._frozen ? "Remove from freezer" : "Move to freezer"}
+              >❄️</button>
               <button onClick={()=>toggleOutOfStock(r.item)} className="text-[11px] text-stone-500 hover:text-red-700 underline whitespace-nowrap" title={r._out?"Restore this item to the pantry":"Mark this item as out of stock — it will be excluded from recipe matching"}>
                 {r._out ? "Restore" : "Out"}
               </button>
@@ -5694,16 +5723,25 @@ function App(){
   }, [outOfStock, findRowByItem, setItemSyncError]);
 
   // Toggle the in_freezer flag for a pantry item. Same optimistic-write
-  // pattern as toggleOutOfStock, with one extra wrinkle: if Supabase rejects
-  // the PATCH because the in_freezer column doesn't exist yet (the
-  // ALTER TABLE hasn't been run), we keep the local state change instead of
-  // rolling it back — the dashboard still works correctly today, the user
-  // just won't get cross-device sync until they run the migration. The
-  // PostgREST error code for "undefined column" is 42703.
+  // pattern as toggleOutOfStock, with two extras:
+  //   1. When freezing, stamp today's date into frozen_at. When unfreezing,
+  //      clear it. This lets decayed() split decay into pre-freeze (normal
+  //      rate) and post-freeze (frozen rate) segments — so freezing a
+  //      3-day-old salmon doesn't retroactively boost freshness; it just
+  //      stops the bleed from that point forward.
+  //   2. Schema fallback for the in_freezer / frozen_at columns: if
+  //      Supabase returns 42703 or any "column" error, log it and keep the
+  //      local state. The PostgREST error code for "undefined column" is
+  //      42703. The frozen_at column ALTER ran in v29 — the fallback is
+  //      defence-in-depth in case a future schema change removes it.
   const toggleInFreezer = useCallback((itemName) => {
     const row = findRowByItem(itemName);
     const wasFrozen = inFreezer.has(itemName);
     const newFrozen = !wasFrozen;
+    // Today as YYYY-MM-DD (matches the existing `purchased` / `expires` shape).
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const newFrozenAt = newFrozen ? todayIso : null;
+    const wasFrozenAt = row ? (row._frozen_at || null) : null;
     // 1. Optimistic local update on the Set
     setInFreezer(prev => {
       const next = new Set(prev);
@@ -5711,32 +5749,35 @@ function App(){
       return next;
     });
     // Also reflect immediately on the pantry row so decayed() picks up the
-    // new rate this render — otherwise the Freshness bar wouldn't change
-    // until the Supabase PATCH round-trips back.
+    // new rate AND the new freeze date this render — otherwise the Freshness
+    // bar wouldn't change until the Supabase PATCH round-trips back.
     if (row) {
-      setPantry(prev => prev.map(p => p.id === row.id ? {...p, _in_freezer: newFrozen} : p));
+      setPantry(prev => prev.map(p => p.id === row.id
+        ? {...p, _in_freezer: newFrozen, _frozen_at: newFrozenAt}
+        : p));
     }
     setItemSyncError(itemName, null);
     if (!row) return; // no row id → local-only, nothing to sync
-    // 2. Fire PATCH in background
-    patchPantryRow(row.id, { in_freezer: newFrozen })
+    // 2. Fire PATCH in background — write both fields in one call
+    patchPantryRow(row.id, { in_freezer: newFrozen, frozen_at: newFrozenAt })
       .catch(err => {
         const msg = String(err && err.message || err);
-        // Schema not migrated yet — keep local state, just log it. The page
-        // continues to work locally; cross-device sync waits on the ALTER.
-        if (msg.includes("in_freezer") || msg.includes("42703") || msg.toLowerCase().includes("column")) {
-          console.warn(`in_freezer column not yet in Supabase pantry table — keeping local state for "${itemName}". Run: ALTER TABLE pantry ADD COLUMN in_freezer boolean DEFAULT false;`);
+        // Schema not migrated yet — keep local state, just log it.
+        if (msg.includes("in_freezer") || msg.includes("frozen_at") || msg.includes("42703") || msg.toLowerCase().includes("column")) {
+          console.warn(`Freezer column missing in Supabase pantry_items — keeping local state for "${itemName}". Migrations needed: ALTER TABLE pantry_items ADD COLUMN in_freezer boolean NOT NULL DEFAULT false; ALTER TABLE pantry_items ADD COLUMN frozen_at date;`);
           return;
         }
-        // Any other error: roll back the local change.
-        console.error(`Failed to sync in_freezer for "${itemName}":`, err);
+        // Any other error: roll back both local changes.
+        console.error(`Failed to sync freezer state for "${itemName}":`, err);
         setInFreezer(prev => {
           const next = new Set(prev);
           if (wasFrozen) next.add(itemName); else next.delete(itemName);
           return next;
         });
         if (row) {
-          setPantry(prev => prev.map(p => p.id === row.id ? {...p, _in_freezer: wasFrozen} : p));
+          setPantry(prev => prev.map(p => p.id === row.id
+            ? {...p, _in_freezer: wasFrozen, _frozen_at: wasFrozenAt}
+            : p));
         }
         setItemSyncError(itemName, "Couldn't save — tap again to retry");
       });
