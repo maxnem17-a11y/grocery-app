@@ -109,6 +109,10 @@ const SITE_VERSION = "2026-05-15.3";
 const SITE_CHANGELOG = [
   // newest first
   { version: "2026-05-15.3", date: "2026-05-15", changes: [
+    "**Tab order: Gaps and Orders swapped.** New order is Planner / Recipes / Pantry / Gaps / Orders / Stats. Orders is now penultimate, sitting next to Stats — both are reporting/reference tabs with no decisions to make. Gaps sits closer to Pantry where it conceptually belongs (what's missing from current stock).",
+    "**Stats tab: GapCard chip labels restored.** Workflow integrity cards show `✓ OK` / `⚠ Fix needed` / `⚠ Critical action needed` rather than `low` / `medium` / `high`. Section subtitle and tip rewritten to match. The original change was made in 2026-05-14.x and got dropped during the 2026-05-15 rewrites — this re-applies it. Also cleaned up a dead ternary on the `makeable_pct populated` card (`severity={x ? 'low':'low'}` → just `severity=\"low\"`).",
+    "**Pantry tab: default sort is now Expires (soonest first).** The most useful first-glance is 'what do I need to use up'. Previously defaulted to alphabetical by item name. Out-of-stock items still sink to the bottom regardless of sort; items with no recorded expiry date sink to the bottom of asc / top of desc.",
+    "**Orders tab: Khalil allergen exposure section is now collapsible, default closed.** Matches the same treatment given to Order history and Repeat-purchase patterns in 2026-05-15.1. The Orders tab still leads with the spend chart + summary KPIs above the fold; this section opens on click when needed.",
     "**Parser ported to the Edge Function for .eml inputs.** The 486-line Python `parse_tesco.py` is now also `parse_tesco.ts` (alongside `index.ts` in the function source). Same output shape, byte-for-byte equivalent — verified by a diff harness across all 13 archived .eml files. The function accepts a new `{ retailer, eml }` payload that takes raw email text and runs the MIME walk + HTML extract + parser entirely server-side. The legacy `{ retailer, order }` shape still works (used by the grocery-receipt-archive skill).",
     "**Dashboard switched to dry-run preview → save for .eml.** `ReceiptParser` for .eml files no longer parses in-browser. The flow is now: drop file → POST raw text to `ingest-receipt?dry_run=true` → render preview from the returned `order` field → click Save → POST the same payload without `dry_run`. Single canonical parser path; if the parser changes, both the dashboard and the skill see the same behaviour after a function deploy. The in-browser `readEmlText` helper is reduced to a one-line `file.text()` wrapper; `parseTesco` is retained for the PDF path only.",
     "**PDF support stays in-browser by design.** PDF text extracted via pdf.js is structurally different from email HTML extraction (no ` | ` separators, line breaks instead) — making the function tolerant of both would have meant carrying two parsers server-side. Instead, PDFs continue to be extracted and parsed client-side, then POSTed to the function via the legacy `{ retailer, order }` shape. This keeps `parseTesco` in the browser bundle for PDF use only. .eml uploads (the primary path) get the canonical server parser.",
@@ -1225,7 +1229,7 @@ function PantryView({pantry, outOfStock, toggleOutOfStock, qtyAdjustments, adjus
   //   khalil → asc (son_allergen=0 first — most flagged surfaced)
   // Out-of-stock rows are always sunk to the bottom regardless of sort direction.
   const PANTRY_DEFAULT_DIR = { item:"asc", category:"asc", qty:"asc", conf:"asc", expires:"asc", khalil:"asc" };
-  const [sortBy, setSortBy] = useState("item");
+  const [sortBy, setSortBy] = useState("expires");
   const [sortDir, setSortDir] = useState("asc");
   const toggleSort = (key) => {
     if (sortBy !== key) { setSortBy(key); setSortDir(PANTRY_DEFAULT_DIR[key] || "asc"); return; }
@@ -3126,6 +3130,7 @@ function OrdersView(){
     </Section>
 
     {stats.khalilExposure.length>0 && <Section title="Khalil allergen exposure" subtitle={`${stats.khalilExposure.length} distinct items containing his allergens have been ordered`} tone="warn"
+      collapsible defaultOpen={false}
       tip="Items bought historically that Khalil can't eat. Not a problem in itself (these are for the adults), but useful context — anything frequently re-purchased may worth replacing with a Khalil-safe alternative.">
       <div className="grid sm:grid-cols-2 gap-1.5 text-xs">
         {stats.khalilExposure.slice(0,40).map((t,i)=> <div key={i} className="card px-2.5 py-1.5 flex items-center justify-between gap-2">
@@ -4008,14 +4013,14 @@ function AuditView({pantry}){
     <div className="text-xs text-stone-600 bg-stone-50 border border-stone-200 rounded-lg px-3 py-2">
       <strong>Library health check.</strong> Quick stats about the recipe library and pantry coverage — useful for spotting gaps in the data (missing tags, untagged recipes, manifest mismatches) rather than gaps in your basket.
     </div>
-    <Section title="Workflow integrity" subtitle="Snapshot of how complete the structured data is" tone="ok"
-      tip="Each card reports on one quality dimension: are all recipes tagged with an audience, are all pantry items tagged with an allergen flag, etc. Green = OK, amber = a small fix needed.">
+    <Section title="Workflow integrity" subtitle="Health check — green means all good, amber means a small fix is needed" tone="ok"
+      tip="Each card reports on one data-quality dimension: are all recipes tagged with an audience, are all pantry items tagged with an allergen flag, etc. Status chip on each card: ✓ OK = nothing to do, ⚠ Fix needed = small repair recommended, ⚠ Critical action needed = fix before relying on this data.">
       <div className="grid sm:grid-cols-2 gap-3 text-sm">
         <GapCard label="Recipes with audience tag" value={taggedRecipes} of={RECIPES.length} severity={untagged > 0 ? "medium":"low"}
                  note={untagged > 0 ? `${untagged} recipes still untagged — re-import the patched files in /project-updates/.` : "All recipes now carry audience + eaters tags."}/>
         <GapCard label="Pantry items with allergen_flag" value={pantryWithFlags} of={pantry.length} severity={pantryWithFlags < pantry.length ? "medium":"low"}
                  note={pantryWithFlags < pantry.length ? "Some pantry items missing the allergen_flag field — re-import the patched current_pantry.json." : "All pantry items tagged."}/>
-        <GapCard label="makeable_pct populated" value={hasMakeablePct} of={RECIPES.length} severity={hasMakeablePct < RECIPES.length/2 ? "low":"low"}
+        <GapCard label="makeable_pct populated" value={hasMakeablePct} of={RECIPES.length} severity="low"
                  note="Computed live on every render in this dashboard. Not stored persistently in the JSON — that's fine since pantry changes invalidate it."/>
         <GapCard label="Derived subsets" value="Generated" of="2 files" severity="low"
                  note="khalil-safe-meals.json (38) and max-pescatarian.json (93) regenerated and shipped in /project-updates/."/>
@@ -4059,13 +4064,16 @@ function AuditView({pantry}){
 }
 function GapCard({label, value, of, severity, note}){
   const tone = severity==="high"?"danger":severity==="medium"?"warn":"ok";
-  const sevTitle = severity==="high" ? "High severity — fix before relying on this data"
-    : severity==="medium" ? "Medium severity — small fix recommended"
-    : "Low severity — all good";
+  const sevLabel = severity==="high" ? "⚠ Critical action needed"
+    : severity==="medium" ? "⚠ Fix needed"
+    : "✓ OK";
+  const sevTitle = severity==="high" ? "Critical — fix before relying on this data"
+    : severity==="medium" ? "Small fix recommended"
+    : "All good — no action needed";
   return <div className="card p-3">
     <div className="flex items-start justify-between gap-2 mb-1">
       <div className="font-medium text-sm leading-snug">{label}</div>
-      <Chip tone={tone} title={sevTitle}>{severity}</Chip>
+      <Chip tone={tone} title={sevTitle}>{sevLabel}</Chip>
     </div>
     <div className="mono text-xs text-stone-500 mb-1.5">{value}{of!==undefined && of!=="—" ? ` / ${of}`:""}</div>
     <div className="text-xs text-stone-600 leading-snug">{note}</div>
@@ -4266,8 +4274,8 @@ function App(){
     ["planner","Planner", "What to cook this week, grouped by what's expiring, what's whole-household-safe, and what's high-protein."],
     ["recipes","Recipes", "Search and filter every recipe in your library. Sort by makeability, protein, or prep time."],
     ["pantry","Pantry", "Everything currently in the kitchen, with expiry and confidence tracking. Mark items out of stock if you've used them up."],
-    ["tesco","Orders", "Past Tesco deliveries — spend trends, repeat purchases, substitutions, and Khalil allergen exposure. Read-only."],
     ["gaps","Gaps", "Items you buy regularly that are missing from both your latest order and the pantry — candidates for the next basket."],
+    ["tesco","Orders", "Past Tesco deliveries — spend trends, repeat purchases, substitutions, and Khalil allergen exposure. Read-only."],
     ["audit","Stats", "Library health check — recipe coverage, allergen tagging, and audience breakdown by source."],
   ];
 
