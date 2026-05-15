@@ -110,9 +110,12 @@ const { useState, useMemo, useEffect, useCallback, useRef, createContext, useCon
 // (2) only apply changes not already listed, (3) append a new
 // entry below describing what they changed.
 // ============================================================
-const SITE_VERSION = "2026-05-15.7";
+const SITE_VERSION = "2026-05-15.8";
 const SITE_CHANGELOG = [
   // newest first
+  { version: "2026-05-15.8", date: "2026-05-15", changes: [
+    "**Crash fix (proper this time): React error #310 — hook order violation.** v7's fix for the `nextDelivery is not defined` error put the `useMemo` between the second and third early-returns in App. That meant the hook only ran on the happy-path render, not on the loading or loadError renders — different hook count between renders = React error #310. Moved the `useMemo` above all three early-returns (loading / loadError / no-data) so the hook order is identical on every render path. Note to self: 'above the early-return' isn't enough when there are multiple early-returns above it too.",
+  ]},
   { version: "2026-05-15.7", date: "2026-05-15", changes: [
     "**Crash fix: `nextDelivery is not defined` in App.** App was rendering `<LarderBrand pantry={pantry} nextDelivery={nextDelivery} />` but `nextDelivery` only existed inside PlannerView — the App-scoped reference threw a ReferenceError that the ErrorBoundary caught, surfacing as 'Something went wrong rendering the page'. Pre-existing bug, not introduced by recent rounds — the LarderBrand prop was wired up before App ever computed the value. Fix: added `const nextDelivery = useMemo(() => suggestNextDelivery(receipts), [receipts])` in App, placed above the early-return so hook order stays consistent across renders.",
   ]},
@@ -4928,6 +4931,14 @@ function App(){
     : null;
 
   // ---- Loading + error gates ----
+  // Estimate next delivery date from receipt cadence — passed to LarderBrand so the
+  // pantry-status subtitle can say "Delivery in Nd · pantry X% full". Defined here at
+  // App-scope (rather than inside LarderBrand) because the same value is reused by
+  // PlannerView for the basket suggestion's `suggested_delivery_date` field.
+  // MUST sit above all early-returns below so hook order stays consistent across
+  // every render path (loading → loadError → no-data → happy path).
+  const nextDelivery = useMemo(() => suggestNextDelivery(receipts), [receipts]);
+
   if (loading) {
     return <div className="max-w-7xl mx-auto px-4 sm:px-6 py-20 text-center">
       <div className="inline-block animate-spin rounded-full h-10 w-10 border-2 border-stone-300 border-t-stone-800 mb-4"></div>
@@ -4945,12 +4956,6 @@ function App(){
       </div>
     </div>;
   }
-  // Estimate next delivery date from receipt cadence — passed to LarderBrand so the
-  // pantry-status subtitle can say "Delivery in Nd · pantry X% full". Defined here at
-  // App-scope (rather than inside LarderBrand) because the same value is reused by
-  // PlannerView for the basket suggestion's `suggested_delivery_date` field.
-  // Must sit above the early-return below so hook order stays consistent across renders.
-  const nextDelivery = useMemo(() => suggestNextDelivery(receipts), [receipts]);
 
   if (!recipesLoaded || pantry.length === 0) {
     return <div className="max-w-2xl mx-auto px-4 sm:px-6 py-20">
