@@ -105,9 +105,15 @@ const { useState, useMemo, useEffect, useCallback, useRef, createContext, useCon
 // (2) only apply changes not already listed, (3) append a new
 // entry below describing what they changed.
 // ============================================================
-const SITE_VERSION = "2026-05-15.3";
+const SITE_VERSION = "2026-05-15.4";
 const SITE_CHANGELOG = [
   // newest first
+  { version: "2026-05-15.4", date: "2026-05-15", changes: [
+    "**Dry-run now reports archive status upfront.** When .eml dry-run runs, the function does the `(retailer, order_number)` dedup lookup as part of the parse response — same lookup it would do on save, just done at preview time. Response shape extended: `{status: 'dry_run', retailer, order, exists, existing_id?, existing_delivery_date?, existing_email_type?}`. The dedup check is one cheap SELECT; user gets the answer to 'is this already in the archive?' immediately rather than having to click Save and read the duplicate banner.",
+    "**Receipt preview: archive-status banner.** Above the KPI grid, the preview now shows one of: amber 'this will replace the previous version' (existing receipt + new amendment), emerald '✓ already in archive, nothing to do' (duplicate), or stone 'couldn't check archive status' (lookup failed). No banner for genuine new orders — the green Save button is the affirmative signal.",
+    "**Save button now previews its outcome.** Label is 'Save (replace previous)' (amber) when about to overwrite an amendment, 'Already in archive' (disabled/grey) when the click would be a no-op, '💾 Save to archive' (teal) for new orders. Disabled state for the duplicate case prevents the no-op click — title attribute explains why.",
+    "**PDF path unchanged.** PDFs still parse in-browser and skip the dry-run entirely, so no archive-status banner appears for them. Save button is the original teal 'Save to archive'. If you want PDF-path parity in future, the easiest path is having the PDF flow do a fast lookup call against the function before rendering — defer until needed.",
+  ]},
   { version: "2026-05-15.3", date: "2026-05-15", changes: [
     "**Tab order: Gaps and Orders swapped.** New order is Planner / Recipes / Pantry / Gaps / Orders / Stats. Orders is now penultimate, sitting next to Stats — both are reporting/reference tabs with no decisions to make. Gaps sits closer to Pantry where it conceptually belongs (what's missing from current stock).",
     "**Stats tab: GapCard chip labels restored.** Workflow integrity cards show `✓ OK` / `⚠ Fix needed` / `⚠ Critical action needed` rather than `low` / `medium` / `high`. Section subtitle and tip rewritten to match. The original change was made in 2026-05-14.x and got dropped during the 2026-05-15 rewrites — this re-applies it. Also cleaned up a dead ternary on the `makeable_pct populated` card (`severity={x ? 'low':'low'}` → just `severity=\"low\"`).",
@@ -2628,6 +2634,15 @@ function ReceiptParser(){
   // hence the split path. .eml is the canonical path.
   const [inputMode, setInputMode] = useState(null); // "eml" | "pdf" | null
   const [rawEml, setRawEml]       = useState(null); // raw text for the "eml" path; reused on save
+  // Archive-existence info from the dry-run lookup. Populated for the .eml path
+  // only (PDFs skip dry-run since they're parsed in-browser). Shape:
+  //   null              → not yet checked (PDF path, or pre-load)
+  //   { exists: false } → not in archive, save will insert
+  //   { exists: true, will_replace, existing_id, existing_delivery_date, existing_email_type }
+  //                      → in archive; will_replace is true when new payload is
+  //                       an amendment AND existing row isn't already the same amendment
+  //   { exists: null }  → lookup failed (lookup_error in result); treat as unknown
+  const [archiveStatus, setArchiveStatus] = useState(null);
   // Save-to-archive state. Idle until user clicks; transitions to saving →
   // saved / replaced / duplicate / error. Persisted in the component so a
   // successful save stays visible after the parser preview is dismissed via
@@ -2648,6 +2663,7 @@ function ReceiptParser(){
     setSaveResult(null);
     setInputMode(null);
     setRawEml(null);
+    setArchiveStatus(null);
     try {
       const lower = file.name.toLowerCase();
       const isPdf = lower.endsWith(".pdf") || file.type === "application/pdf";
@@ -2704,6 +2720,27 @@ function ReceiptParser(){
       setParsed(order);
       setRawEml(raw);
       setInputMode("eml");
+      // Derive archive status from the dry-run lookup. The function returns
+      // `exists` (true/false/null) plus the existing row's id, delivery_date,
+      // and email_type when found. Compute `will_replace` here so the banner
+      // logic stays declarative: a save click will replace if the new payload
+      // is an amendment AND the existing row isn't already the same amendment.
+      if (result.exists === true) {
+        const willReplace = order.email_type === "amendment"
+          && result.existing_email_type !== "amendment";
+        setArchiveStatus({
+          exists: true,
+          will_replace: willReplace,
+          existing_id: result.existing_id,
+          existing_delivery_date: result.existing_delivery_date,
+          existing_email_type: result.existing_email_type,
+        });
+      } else if (result.exists === false) {
+        setArchiveStatus({ exists: false });
+      } else {
+        // exists === null/undefined: lookup failed or no order number to check
+        setArchiveStatus({ exists: null, lookup_error: result.lookup_error });
+      }
       setStatus("done");
     } catch (e) {
       console.error("Receipt parse error", e);
@@ -2811,6 +2848,34 @@ function ReceiptParser(){
             ⚠️ <strong>{parsed.parse_quality.replace(/_/g, " ")}.</strong> {parsed.parse_warning}
           </div>
         )}
+        {/* Archive status banner — surfaces what the Save click will do, based on
+            the dry-run dedup lookup. Three cases:
+              - exists+will_replace: amber, "this will replace the previous version"
+              - exists+!will_replace: emerald, "already in archive, nothing to do"
+              - exists===null: stone, "could not check archive"
+            For new orders (exists===false) we don't render a banner — the default
+            assumption is "this is a fresh insert" and the green Save button conveys it.
+            Skip entirely for the PDF path (inputMode !== "eml") since dry-run doesn't run. */}
+        {inputMode === "eml" && archiveStatus && archiveStatus.exists === true && archiveStatus.will_replace && (
+          <div className="text-xs bg-amber-50 border border-amber-200 text-amber-800 rounded px-3 py-2">
+            ⚠️ <strong>This will replace the previous version.</strong>{" "}
+            An earlier {archiveStatus.existing_email_type || "receipt"} for order {parsed.order_number} is already in the archive
+            (saved {archiveStatus.existing_delivery_date ? formatDate(archiveStatus.existing_delivery_date) : "previously"}).
+            Clicking Save will delete it and insert this amendment in its place.
+          </div>
+        )}
+        {inputMode === "eml" && archiveStatus && archiveStatus.exists === true && !archiveStatus.will_replace && (
+          <div className="text-xs bg-emerald-50 border border-emerald-200 text-emerald-800 rounded px-3 py-2">
+            ✓ <strong>Already in archive.</strong>{" "}
+            Order {parsed.order_number} was saved {archiveStatus.existing_delivery_date ? `on ${formatDate(archiveStatus.existing_delivery_date)}` : "previously"}.
+            Nothing to do — the preview is for reference only.
+          </div>
+        )}
+        {inputMode === "eml" && archiveStatus && archiveStatus.exists === null && (
+          <div className="text-xs bg-stone-100 border border-stone-300 text-stone-700 rounded px-3 py-2">
+            Couldn't check archive status{archiveStatus.lookup_error ? ` (${archiveStatus.lookup_error})` : ""}. The Save button will still work — clicking it will return the right result.
+          </div>
+        )}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           <KV label="Date"        value={parsed.delivery_date ? formatDate(parsed.delivery_date) : "—"} sub={parsed.email_type || "tesco"}/>
           <KV label="Order #"     value={parsed.order_number || "—"}/>
@@ -2878,10 +2943,28 @@ function ReceiptParser(){
             <div className="text-sm font-medium">Save to archive</div>
             <div className="flex items-center gap-2 flex-wrap">
               <button onClick={saveToArchive}
-                      disabled={saveState === "saving" || saveState === "saved" || saveState === "replaced" || saveState === "duplicate" || parsed.parse_quality === "no_items_found"}
-                      title={parsed.parse_quality === "no_items_found"
-                        ? "Can't save — no items were extracted. Try a different copy of the receipt."
-                        : "Save this order directly to Supabase via the ingest-receipt Edge Function"}
+                      disabled={
+                        saveState === "saving"
+                        || saveState === "saved"
+                        || saveState === "replaced"
+                        || saveState === "duplicate"
+                        || parsed.parse_quality === "no_items_found"
+                        // New in 2026-05-15.4: dry-run dedup told us this order
+                        // is already in the archive and a save click won't be
+                        // a replace — so the click would be a guaranteed no-op
+                        // (function would return `duplicate`). Disable rather
+                        // than let users click a button documented as inert.
+                        || (inputMode === "eml" && archiveStatus && archiveStatus.exists === true && !archiveStatus.will_replace)
+                      }
+                      title={
+                        parsed.parse_quality === "no_items_found"
+                          ? "Can't save — no items were extracted. Try a different copy of the receipt."
+                        : (inputMode === "eml" && archiveStatus && archiveStatus.exists === true && !archiveStatus.will_replace)
+                          ? "Already in archive — nothing to save."
+                        : (inputMode === "eml" && archiveStatus && archiveStatus.exists === true && archiveStatus.will_replace)
+                          ? "This will replace the previous version of this order."
+                        : "Save this order directly to Supabase via the ingest-receipt Edge Function"
+                      }
                       className={"text-xs px-3 py-1 rounded border " +
                         (saveState === "saved" || saveState === "replaced"
                           ? "border-emerald-700 bg-emerald-700 text-white"
@@ -2891,13 +2974,21 @@ function ReceiptParser(){
                           ? "border-rose-700 bg-rose-50 text-rose-800"
                           : saveState === "saving"
                           ? "border-stone-400 bg-stone-200 text-stone-600 cursor-wait"
+                          : (inputMode === "eml" && archiveStatus && archiveStatus.exists === true && archiveStatus.will_replace)
+                          ? "border-amber-700 bg-amber-600 text-white hover:bg-amber-700"
                           : "border-teal-700 bg-teal-700 text-white hover:bg-teal-800") +
-                        (parsed.parse_quality === "no_items_found" ? " opacity-50 cursor-not-allowed" : "")}>
+                        ((parsed.parse_quality === "no_items_found"
+                          || (inputMode === "eml" && archiveStatus && archiveStatus.exists === true && !archiveStatus.will_replace))
+                          ? " opacity-50 cursor-not-allowed" : "")}>
                 {saveState === "saving"    ? "Saving…"
                  : saveState === "saved"   ? "✓ Saved to archive"
                  : saveState === "replaced" ? "✓ Replaced (amendment)"
                  : saveState === "duplicate" ? "Already in archive"
                  : saveState === "error"   ? "Save failed — retry"
+                 : (inputMode === "eml" && archiveStatus && archiveStatus.exists === true && !archiveStatus.will_replace)
+                   ? "Already in archive"
+                 : (inputMode === "eml" && archiveStatus && archiveStatus.exists === true && archiveStatus.will_replace)
+                   ? "💾 Save (replace previous)"
                  : "💾 Save to archive"}
               </button>
               <button onClick={() => setShowJson(s => !s)}
