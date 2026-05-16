@@ -9,37 +9,43 @@ Household grocery intelligence dashboard. Currently mid-migration from a single-
 - **Build:** Vite (no Tailwind compiler — base utility classes only, see "Constraints" below)
 - **UI:** React 18, no router yet
 - **Data:** Supabase (PostgREST) — credentials in `CREDENTIALS.md` (gitignored)
-- **Deploy:** Static — `index__4_.html` is the live single-file build until the Vite migration is shipped
+- **Deploy:** Static PWA — `index.html` at the git root (parent of this directory) is the live single-file build until the Vite migration is shipped
 
 ---
 
 ## File map
 
 ```
-grocery-app/larder/
-├── index__4_.html          ← canonical / live file. Source of truth until Vite ships.
-├── CREDENTIALS.md          ← Supabase keys. Gitignored. Don't commit.
-├── KNOWN_ISSUES.md         ← pre-existing bugs documented, not regressions
-├── CLAUDE.md               ← this file
-├── index.html              ← Vite entry (smoke-test boot only right now)
-├── package.json
-├── vite.config.js
-└── src/
-    ├── main.jsx
-    ├── App.jsx             ← smoke-test boot page; no real views ported yet
-    ├── lib/
-    │   ├── supabase.js     ← sbFetch / sbWrite helpers
-    │   ├── text.js         ← string normalisation
-    │   ├── allergens.js    ← Khalil/Max/Emily filter logic
-    │   └── pantry-math.js  ← pure pantry/confidence calculations
-    └── components/         ← created as we extract; primitives.jsx is next
+grocery-app/                ← git root
+├── index.html              ← canonical / live PWA (~414KB). Source of truth until Vite ships.
+├── manifest.json           ← PWA manifest
+├── service-worker.js       ← PWA service worker
+├── icons/                  ← PWA icons
+├── README.md
+└── larder/                 ← Vite migration target
+    ├── CREDENTIALS.md      ← Supabase keys. Gitignored. Don't commit.
+    ├── KNOWN_ISSUES.md     ← pre-existing bugs documented, not regressions
+    ├── CLAUDE.md           ← this file
+    ├── index.html          ← Vite entry (smoke-test boot only right now)
+    ├── package.json
+    ├── vite.config.js
+    └── src/
+        ├── main.jsx
+        ├── App.jsx                ← smoke-test boot page; no real views ported yet
+        ├── lib/
+        │   ├── supabase.js        ← sbFetch / sbWrite helpers
+        │   ├── text.js            ← string normalisation
+        │   ├── allergens.js       ← Khalil/Max/Emily filter logic
+        │   ├── pantry-math.js     ← pure pantry/confidence calculations
+        │   └── household-rules.js ← never_restock patterns
+        └── components/     ← will be created when first view is extracted
 ```
 
 ---
 
 ## Migration principles
 
-1. **Incremental extraction, not parallel build.** Pull symbols out of `index__4_.html` one at a time into `src/`. Old file stays the canonical truth.
+1. **Incremental extraction, not parallel build.** Pull symbols out of the canonical `index.html` (at the git root) one at a time into `src/`. Old file stays the canonical truth.
 2. **`npm run build` must stay green after every step.**
 3. **Smoke-test at `localhost:5173`** against live Supabase before committing.
 4. **No behaviour change without explicit scope.** A pure file-move shouldn't alter rendered output.
@@ -81,36 +87,30 @@ See `KNOWN_ISSUES.md`. The almond-milk → tree-nut classification gap is intent
 ## Current state
 
 **Last verified:** 2026-05-16
-**Last commit:** `f36f2ee` — WIP: Vite scaffold + pure-logic module extractions
+**Last commit:** `248329c` — Extract HOUSEHOLD_RULES into src/lib/household-rules.js
 **Smoke test:** ✅ localhost:5173 boots against live Supabase, all green ticks
 
 ### Completed
 - Vite scaffold (package.json, vite.config.js, index.html, main.jsx, App.jsx)
-- RAW JSON blob pruned in `index__4_.html` (646KB → 414KB)
-- `src/components/primitives.jsx` authored (8 named exports). **Not yet imported by Vite scaffold.**
+- RAW JSON blob pruned in canonical `index.html` (646KB → 414KB)
 - `src/lib/supabase.js` (~217 lines, sbWrite helper)
 - `src/lib/text.js` (~70 lines)
 - `src/lib/allergens.js` (~165 lines)
 - `src/lib/pantry-math.js` (~135 lines)
+- `src/lib/household-rules.js` (34 lines, never_restock patterns from RAW blob — step 7b)
 - `KNOWN_ISSUES.md`
 - `npm run build` green (34 modules)
 
-### Next: Step 7a + 7b
-Agreed plan from prior session:
+### Next: Step 7c — extract ReceiptsContext
 
-**7a — wire up `primitives.jsx`**
-- The file exists; the Vite scaffold doesn't import it yet.
-- Add a smoke import in `App.jsx` so `npm run build` proves it parses.
-- Zero behaviour change in `index__4_.html`.
+Per the prior session's plan, after 7a/7b. `ReceiptsContext` + `mapReceiptRow` + `fetchReceipts` move into `src/lib/` (or a small `src/contexts/`), and `App.jsx` gets a smoke import to prove it parses.
 
-**7b — extract `HOUSEHOLD_RULES` from RAW blob**
-- Currently `index__4_.html` line ~3693: `const HOUSEHOLD_RULES = RAW.household_rules || { never_restock: [] };`
-- 3 consumers in `GapsView` (~lines 4364, 4410, 4413).
-- Move to `src/lib/household-rules.js` as a JS const for now. Supabase migration proposed separately, not in scope for 7b.
+### Deferred
 
-### Skipped for now
-- SKU index (`buildSkuIndex` / `lookupSku` / `TescoSkusContext`) — tightly coupled with views. Extract alongside the first view that consumes them.
-- Full `ReceiptsContext` + `mapReceiptRow` + `fetchReceipts` — planned as **Step 7c**, after 7a/7b land.
+**Step 7a — wire up `primitives.jsx`** (deferred indefinitely)
+The file was listed as authored in a prior session but does not exist in this repo (never committed, not on disk; likely lived only in a prior sandbox environment — see the `/home/claude/larder/` path comment in `App.jsx:146` for evidence). Per migration principle #5 ("Don't pre-extract"), defer until a view that actually consumes primitives is being ported. At that point we'll re-author `src/components/primitives.jsx` from the canonical `index.html` alongside the view extraction.
+
+**SKU index** (`buildSkuIndex` / `lookupSku` / `TescoSkusContext`) — tightly coupled with views. Extract alongside the first view that consumes them.
 
 ### Update protocol
 At the end of each session, update the "Current state" section above:
