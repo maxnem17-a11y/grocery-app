@@ -87,28 +87,32 @@ See `KNOWN_ISSUES.md`. The almond-milk → tree-nut classification gap is intent
 ## Current state
 
 **Last verified:** 2026-05-16
-**Last commit:** `248329c` — Extract HOUSEHOLD_RULES into src/lib/household-rules.js
+**Last commit:** `HEAD` — Extract ReceiptsContext + mapReceiptRow (step 7c). See `git show HEAD` for the actual hash; next session should bump this line to that hash per the update protocol.
 **Smoke test:** ✅ localhost:5173 boots against live Supabase, all green ticks
 
 ### Completed
 - Vite scaffold (package.json, vite.config.js, index.html, main.jsx, App.jsx)
 - RAW JSON blob pruned in canonical `index.html` (646KB → 414KB)
-- `src/lib/supabase.js` (~217 lines, sbWrite helper)
+- `src/lib/supabase.js` (~262 lines, sbWrite helper + mapReceiptRow)
 - `src/lib/text.js` (~70 lines)
 - `src/lib/allergens.js` (~165 lines)
 - `src/lib/pantry-math.js` (~135 lines)
 - `src/lib/household-rules.js` (34 lines, never_restock patterns from RAW blob — step 7b)
+- `src/contexts/ReceiptsContext.jsx` (~57 lines, ReceiptsProvider + useReceipts hook — step 7c)
+- Smoke import of `ReceiptsContext` in `App.jsx` (TODO: remove on first real consumer)
 - `KNOWN_ISSUES.md`
-- `npm run build` green (34 modules)
+- `npm run build` green (35 modules)
 
-### Next: Step 7c — extract ReceiptsContext
+### Next: Step 7d — TBD
 
-Per the prior session's plan, after 7a/7b. `ReceiptsContext` + `mapReceiptRow` + `fetchReceipts` move into `src/lib/` (or a small `src/contexts/`), and `App.jsx` gets a smoke import to prove it parses.
+Most likely candidate: port `OrdersView` (the smallest `ReceiptsContext` consumer in the canonical `index.html` — see ~L1850). That would wire `ReceiptsProvider` into the live Vite app for the first time, let us delete the `App.jsx` smoke import, and prove the context end-to-end against real receipts. Confirm scope before starting.
 
 ### Deferred
 
 **Step 7a — wire up `primitives.jsx`** (deferred indefinitely)
 The file was listed as authored in a prior session but does not exist in this repo (never committed, not on disk; likely lived only in a prior sandbox environment — see the `/home/claude/larder/` path comment in `App.jsx:146` for evidence). Per migration principle #5 ("Don't pre-extract"), defer until a view that actually consumes primitives is being ported. At that point we'll re-author `src/components/primitives.jsx` from the canonical `index.html` alongside the view extraction.
+
+**ReceiptsRefreshContext** — sister context exposing `refresh()` and `localAppend()` for the ReceiptParser save flow. Lives at canonical `index.html` L5364–L5385, wraps the app at L6005. Add when ReceiptParser itself is being ported.
 
 **SKU index** (`buildSkuIndex` / `lookupSku` / `TescoSkusContext`) — tightly coupled with views. Extract alongside the first view that consumes them.
 

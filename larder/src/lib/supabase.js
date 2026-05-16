@@ -158,6 +158,51 @@ export async function fetchReceipts() {
   return sbFetch("receipts?select=*,items_raw:receipt_items(*)&order=delivery_date.asc&limit=2000");
 }
 
+// Map a Supabase receipt row (with embedded receipt_items) → the shape the
+// existing OrdersView / price-index / pattern-tracking helpers expect.
+// Columns are already named to match (delivery_date, total_paid_gbp,
+// purchased_count, etc.) — the only translation is:
+//   - items_raw (from the embed alias) → items
+//   - sort items by position so the order is stable and matches the
+//     original receipt sequence (PostgREST doesn't guarantee order on
+//     embedded resources unless you ask).
+//
+// Numeric columns come back as JS numbers via PostgREST so total_paid_gbp,
+// total_price_gbp, etc. work directly in arithmetic without parseFloat.
+//
+// Extracted from canonical index.html L861-891.
+export function mapReceiptRow(row) {
+  const items = (row.items_raw || [])
+    .slice()
+    .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+    .map(it => ({
+      name: it.name,
+      qty: it.qty,
+      unit_price_gbp: it.unit_price_gbp,
+      total_price_gbp: it.total_price_gbp,
+      saved_gbp: it.saved_gbp,
+      section: it.section,
+      status: it.status,
+      substituted_for: it.substituted_for,
+    }));
+  return {
+    id: row.id,
+    order_number: row.order_number,
+    email_type: row.email_type,
+    delivery_date: row.delivery_date,
+    order_placed_date: row.order_placed_date,
+    total_paid_gbp: row.total_paid_gbp,
+    total_saved_gbp: row.total_saved_gbp,
+    substitution_count: row.substitution_count,
+    unavailable_count: row.unavailable_count,
+    item_count: row.item_count,
+    purchased_count: row.purchased_count,
+    parse_quality: row.parse_quality,
+    parse_warning: row.parse_warning,
+    items,
+  };
+}
+
 // Fetch the household_allergens table — canonical allergen tokens for
 // Khalil (block / uncertain / safe_phrase), Max (block), and Emily (block).
 // See AllergensContext for the shape consumers expect; mapping happens in

@@ -10,6 +10,11 @@ import {
 } from "./lib/supabase.js";
 import { buildAllergensConfig, khalilAllergenFlag } from "./lib/allergens.js";
 import { decayed, daysUntilExpiry, formatDate, addDays, TODAY } from "./lib/pantry-math.js";
+// Smoke import: keeps ReceiptsContext.jsx in the Vite build graph so the
+// extraction is verified end-to-end before any view consumes it. Remove
+// the `void` line when the first consumer wires up useReceipts / ReceiptsProvider.
+import { useReceipts, ReceiptsProvider } from "./contexts/ReceiptsContext.jsx";
+void useReceipts; void ReceiptsProvider;
 
 // Boot smoke test. The point of this version of App.jsx is to confirm
 // that src/lib/supabase.js — extracted from index__4_.html during the
