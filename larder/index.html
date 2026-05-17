@@ -4,6 +4,84 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Larder</title>
+    <!--
+      Canonical <style> block verbatim from /index.html L30–97 (the live
+      single-file PWA at the git root). Inlined here in step 7d alongside
+      the PantryView extraction — without these classes the view can't
+      fulfil its visual contract (.card, .chip, .bar, .pill, .qty-btn,
+      .infotip*). Inert classes (.navtab*, .help-banner, .legend-strip,
+      .tab-subtitle) are kept verbatim against future view extractions.
+      Defer the Vite-idiomatic CSS pipeline (src/index.css + import) to
+      a dedicated step.
+    -->
+    <style>
+      :root{ --bg:#fafaf7; --card:#fff; --ink:#1c1c1c; --muted:#6b7280; --line:#e7e5e0; }
+      html,body{ background:var(--bg); color:var(--ink); }
+      body{ font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+      .card{ background:var(--card); border:1px solid var(--line); border-radius:14px; }
+      .chip{ display:inline-flex; align-items:center; gap:.25rem; padding:.1rem .5rem; border-radius:999px; font-size:.7rem; font-weight:500; border:1px solid var(--line); white-space: nowrap; }
+      .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+      details > summary{ list-style:none; cursor:pointer; }
+      details > summary::-webkit-details-marker{ display:none; }
+      .bar{ height:6px; border-radius:999px; background:#eee; overflow:hidden; }
+      .bar > div{ height:100%; transition:width .25s ease; }
+      input[type="checkbox"]{ accent-color:#1c1c1c; }
+      /* Tab + filter pill — only style on data-active, no global tabbtn override. */
+      .pill{ border:1px solid #d6d3d0; background:white; color:#525252; padding:.25rem .65rem; border-radius:.5rem; font-size:.75rem; line-height:1.25; transition: all .12s; }
+      .pill:hover{ background:#f5f5f4; }
+      .pill[data-active="true"]{ background:#1c1c1c; color:white; border-color:#1c1c1c; }
+      .qty-btn{ display:inline-flex; align-items:center; justify-content:center; width:1.25rem; height:1.25rem; border:1px solid #d6d3d0; background:white; color:#525252; border-radius:.25rem; font-size:.75rem; line-height:1; transition: all .12s; }
+      .qty-btn:hover:not(:disabled){ background:#f5f5f4; color:#1c1c1c; border-color:#a8a29e; }
+      .qty-btn:disabled{ opacity:.3; cursor:not-allowed; }
+      .navtab{ font-size:.875rem; padding:.5rem .75rem; margin-bottom:-1px; border-bottom:2px solid transparent; color:#6b7280; transition: color .12s, border-color .12s; }
+      .navtab[data-active="true"]{ color:#1c1c1c; border-bottom-color:#1c1c1c; font-weight:600; }
+      .navtab:hover{ color:#1c1c1c; }
+      textarea{ font-family: ui-monospace, monospace; }
+      /* Inline help tooltip — small ⓘ icon with hover/focus reveal */
+      .infotip{ position:relative; display:inline-flex; align-items:center; }
+      .infotip-trigger{
+        width:14px; height:14px; border-radius:999px;
+        background:#e7e5e0; color:#525252;
+        font-size:10px; line-height:14px; text-align:center;
+        cursor:help; user-select:none;
+        border:none; padding:0; margin-left:.25rem;
+        font-family: ui-sans-serif, system-ui, sans-serif; font-weight:600;
+      }
+      .infotip-trigger:hover, .infotip-trigger:focus{ background:#1c1c1c; color:white; outline:none; }
+      .infotip-bubble{
+        position:absolute; z-index:50; bottom:calc(100% + 6px); left:50%; transform:translateX(-50%);
+        width:max-content; max-width:260px;
+        background:#1c1c1c; color:white;
+        padding:.5rem .65rem; border-radius:.5rem;
+        font-size:.7rem; line-height:1.35; font-weight:400;
+        text-align:left; white-space:normal;
+        pointer-events:none; opacity:0; transition: opacity .15s;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      }
+      .infotip-bubble::after{
+        content:""; position:absolute; top:100%; left:50%; transform:translateX(-50%);
+        border:5px solid transparent; border-top-color:#1c1c1c;
+      }
+      .infotip:hover .infotip-bubble,
+      .infotip:focus-within .infotip-bubble{ opacity:1; }
+      /* Right-anchored variant for tips near the right edge */
+      .infotip-bubble.right{ left:auto; right:0; transform:none; }
+      .infotip-bubble.right::after{ left:auto; right:6px; transform:none; }
+      /* Below-anchored variant for tips inside overflow-hidden containers (e.g. table headers).
+         The default bubble pops above the trigger and gets clipped by ancestor overflow:hidden;
+         this variant flips it below the trigger and re-positions the arrow accordingly. */
+      .infotip-bubble.below{ bottom:auto; top:calc(100% + 6px); }
+      .infotip-bubble.below::after{ top:auto; bottom:100%; border-top-color:transparent; border-bottom-color:#1c1c1c; }
+      .infotip-bubble.below.right::after{ left:auto; right:6px; transform:none; }
+      .infotip-bubble.below:not(.right)::after{ left:50%; transform:translateX(-50%); }
+      /* Help-banner card */
+      .help-banner{ background:linear-gradient(135deg, #f0f9ff 0%, #ecfdf5 100%); border:1px solid #bae6fd; }
+      .help-banner h2{ font-size:.95rem; font-weight:600; color:#0c4a6e; }
+      .legend-strip{ font-size:.7rem; color:#6b7280; }
+      .legend-strip .lkey{ display:inline-flex; align-items:center; gap:.3rem; margin-right:.9rem; white-space:nowrap; }
+      .legend-strip .lkey .sw{ width:8px; height:8px; border-radius:2px; display:inline-block; }
+      .tab-subtitle{ font-size:.75rem; color:#6b7280; margin-top:1.25rem; margin-bottom:1rem; line-height:1.4; padding:0 .25rem; }
+    </style>
   </head>
   <body>
     <div id="root"></div>

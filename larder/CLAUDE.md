@@ -26,19 +26,23 @@ grocery-app/                ← git root
     ├── CREDENTIALS.md      ← Supabase keys. Gitignored. Don't commit.
     ├── KNOWN_ISSUES.md     ← pre-existing bugs documented, not regressions
     ├── CLAUDE.md           ← this file
-    ├── index.html          ← Vite entry (smoke-test boot only right now)
+    ├── index.html          ← Vite entry + canonical <style> block L30–97 inlined for CSS parity
     ├── package.json
     ├── vite.config.js
     └── src/
         ├── main.jsx
-        ├── App.jsx                ← smoke-test boot page; no real views ported yet
+        ├── App.jsx                ← real app shell post-7d — pantry sync slice + mounts PantryView
         ├── lib/
-        │   ├── supabase.js        ← sbFetch / sbWrite helpers
+        │   ├── supabase.js        ← sbFetch / sbWrite + mapReceiptRow / mapPantryRow / patchPantryRow
         │   ├── text.js            ← string normalisation
         │   ├── allergens.js       ← Khalil/Max/Emily filter logic
         │   ├── pantry-math.js     ← pure pantry/confidence calculations
         │   └── household-rules.js ← never_restock patterns
-        └── components/     ← will be created when first view is extracted
+        ├── contexts/
+        │   └── ReceiptsContext.jsx ← receipts data + load state (smoke-imported; no consumer yet)
+        └── components/
+            ├── primitives.jsx     ← InfoTip / SortHeader / Chip / Bar / Stat
+            └── PantryView.jsx     ← Pantry tab, verbatim port of canonical L1388–1617
 ```
 
 ---
@@ -86,31 +90,50 @@ See `KNOWN_ISSUES.md`. The almond-milk → tree-nut classification gap is intent
 
 ## Current state
 
-**Last verified:** 2026-05-16
-**Last commit:** `HEAD` — Extract ReceiptsContext + mapReceiptRow (step 7c). See `git show HEAD` for the actual hash; next session should bump this line to that hash per the update protocol.
-**Smoke test:** ✅ localhost:5173 boots against live Supabase, all green ticks
+**Last verified:** 2026-05-17
+**Last commit:** `HEAD` — Step 7d (App-scope pantry sync slice + PantryView; primitives.jsx co-extracted, closing 7a). See `git show HEAD` for the actual hash; next session should bump this line to that hash per the update protocol.
+**App shell:** Post-7d, `src/App.jsx` is the real app shell — pantry sync slice ported and tested. No longer smoke-test framing.
+**Smoke test:** ✅ localhost:5173 renders PantryView against live Supabase; out-of-stock + freezer toggles server-confirmed via MCP (qty debounce deferred — see 7d-followup).
 
 ### Completed
 - Vite scaffold (package.json, vite.config.js, index.html, main.jsx, App.jsx)
 - RAW JSON blob pruned in canonical `index.html` (646KB → 414KB)
-- `src/lib/supabase.js` (~262 lines, sbWrite helper + mapReceiptRow)
+- `src/lib/supabase.js` (~290 lines, sbWrite helper + mapReceiptRow + mapPantryRow)
 - `src/lib/text.js` (~70 lines)
 - `src/lib/allergens.js` (~165 lines)
 - `src/lib/pantry-math.js` (~135 lines)
 - `src/lib/household-rules.js` (34 lines, never_restock patterns from RAW blob — step 7b)
 - `src/contexts/ReceiptsContext.jsx` (~57 lines, ReceiptsProvider + useReceipts hook — step 7c)
-- Smoke import of `ReceiptsContext` in `App.jsx` (TODO: remove on first real consumer)
+- `src/components/primitives.jsx` (~110 lines, InfoTip / SortHeader / Chip / Bar / Stat — step 7a, co-extracted with 7d)
+- `src/components/PantryView.jsx` (~232 lines, verbatim port of canonical L1388–1617 — step 7d)
+- `src/App.jsx` rewritten as real app shell with pantry sync slice (step 7d)
+- Canonical `<style>` block inlined into `larder/index.html` for CSS parity (step 7d)
+- Smoke import of `ReceiptsContext` in `App.jsx` (TODO: remove in step 7e)
 - `KNOWN_ISSUES.md`
-- `npm run build` green (35 modules)
+- `npm run build` green (37 modules)
 
-### Next: Step 7d — TBD
+#### 7d — App-scope pantry sync slice ported (Completed 2026-05-17)
 
-Most likely candidate: port `OrdersView` (the smallest `ReceiptsContext` consumer in the canonical `index.html` — see ~L1850). That would wire `ReceiptsProvider` into the live Vite app for the first time, let us delete the `App.jsx` smoke import, and prove the context end-to-end against real receipts. Confirm scope before starting.
+Verbatim port of pantry sync state and effects from canonical `index.html` L5420–5544, L5665–5681, L5685–5784, L5832–5878, L5898–5943 into `src/App.jsx`. Includes: pantry state + boot fetch/seeding, `pantryRef` + sync effect, `findRowByItem`, `setItemSyncError`, `toggleOutOfStock`, `toggleInFreezer`, `adjustQty` with 150ms debounce, `pagehide` flush. Also: `mapPantryRow` added to `src/lib/supabase.js`; canonical `<style>` block L30–97 pasted into `larder/index.html` for CSS parity; `src/components/PantryView.jsx` ported verbatim from L1388–1617.
+
+Smoke tests:
+- **(a) `out_of_stock` toggle: PASSED.** PATCH 200, server reflected. Initial "silent failure" traced to stale page state pre-hard-refresh.
+- **(b) `in_freezer` toggle (freeze + unfreeze): PASSED.** Optimistic local update (`_in_freezer`, `_frozen_at`) confirmed visible in React DevTools before PATCH completes; both directions server-confirmed via MCP.
+- **(c) `qty_adjustment` debounce: DEFERRED.** Server writes confirmed working (PATCH body shape correct, `qty_adjustment` column updates). Debounce coalescing timing not verified — clicks landed outside the 150ms window so produced N PATCHes for N clicks. Not a regression: functionality works, optimisation unconfirmed. See step 7d-followup.
+
+Known minor: localStorage first-paint seed deliberately omitted (v14.5 deprecated; UX nit only, inline TODO in `src/App.jsx`).
+
+### Next
+
+#### 7d-followup — verify `qty_adjustment` debounce coalescing
+
+Confirm that rapid clicks on the qty +/− buttons within a 150ms window produce a single coalesced PATCH (not one-per-click). Test approach: pin App in React DevTools, watch hooks 15 (`qtyDebounceTimers`) and 16 (`pendingQtyValues`); fire 5+ clicks programmatically via `$r` or a console snippet to guarantee sub-150ms cadence; expect one PATCH with cumulative value. Server-write correctness already proven in 7d. Pure optimisation verification.
+
+#### 7e — first ReceiptsContext consumer
+
+Re-evaluate `AuditView` vs `OrdersView` for porting first now that primitives + pantry sync pattern are in place. The sync slice in 7d establishes the optimistic-update + debounce-batched-write pattern; both consumers will need to align with it for receipt mutations. Pick the simpler of the two to validate the pattern transfers, then port the other.
 
 ### Deferred
-
-**Step 7a — wire up `primitives.jsx`** (deferred indefinitely)
-The file was listed as authored in a prior session but does not exist in this repo (never committed, not on disk; likely lived only in a prior sandbox environment — see the `/home/claude/larder/` path comment in `App.jsx:146` for evidence). Per migration principle #5 ("Don't pre-extract"), defer until a view that actually consumes primitives is being ported. At that point we'll re-author `src/components/primitives.jsx` from the canonical `index.html` alongside the view extraction.
 
 **ReceiptsRefreshContext** — sister context exposing `refresh()` and `localAppend()` for the ReceiptParser save flow. Lives at canonical `index.html` L5364–L5385, wraps the app at L6005. Add when ReceiptParser itself is being ported.
 

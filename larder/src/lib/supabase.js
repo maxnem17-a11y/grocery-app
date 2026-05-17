@@ -203,6 +203,42 @@ export function mapReceiptRow(row) {
   };
 }
 
+// Map a Supabase pantry_items row → the shape PantryView and the App-scope
+// sync model expect. Columns ride through unchanged except for the four
+// _underscore-prefixed passthroughs (out_of_stock, qty_adjustment,
+// in_freezer, frozen_at) — naming them with the prefix marks them as
+// "client-side computed / synced" so consumers don't confuse them with
+// the raw pantry shape used by older code paths.
+//
+// in_freezer is a manual override (the user dragged a fresh item into
+// the freezer) — when true, freshness decay uses the frozen rate
+// regardless of the row's category. frozen_at lets decayed() split decay
+// into pre-freeze (normal rate) and post-freeze (frozen rate) segments
+// — so freezing a 3-day-old salmon doesn't retroactively boost
+// freshness; it just stops the bleed.
+//
+// Extracted from canonical index.html L959–984.
+export function mapPantryRow(row) {
+  return {
+    id: row.id,
+    item: row.item,
+    category: row.category,
+    qty: row.qty,
+    confidence: row.confidence,
+    purchased: row.purchased,
+    expires: row.expires,
+    allergen_flag: row.allergen_flag,
+    // out_of_stock, qty_adjustment, and in_freezer now live on the row
+    // itself (not localStorage) — pass through so the UI can read them.
+    _out_of_stock: !!row.out_of_stock,
+    _qty_adjustment: row.qty_adjustment || 0,
+    _in_freezer: !!row.in_freezer,
+    // ISO date string (YYYY-MM-DD) of when the item was moved to the freezer.
+    // Null when _in_freezer is false, or when the row predates this column.
+    _frozen_at: row.frozen_at || null,
+  };
+}
+
 // Fetch the household_allergens table — canonical allergen tokens for
 // Khalil (block / uncertain / safe_phrase), Max (block), and Emily (block).
 // See AllergensContext for the shape consumers expect; mapping happens in
