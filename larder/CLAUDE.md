@@ -51,7 +51,8 @@ grocery-app/                ← git root
             ├── PantryView.jsx     ← Pantry tab, verbatim port of canonical L1388–1617
             ├── AuditView.jsx      ← Stats tab, verbatim port of canonical L4485–4809 (incl. co-located GapCard)
             ├── LarderBrand.jsx    ← brand block: jar SVG/PNG + style toggle + delivery subtitle (favicon swap deferred — A2)
-            └── LarderFooter.jsx   ← "What's in your kitchen?" sign-off
+            ├── LarderFooter.jsx   ← "What's in your kitchen?" sign-off
+            └── TabIcon.jsx        ← brand-style-aware tab icons (monoline modern + pixel-art retro); useBrandStyle co-located
 ```
 
 ---
@@ -100,9 +101,9 @@ See `KNOWN_ISSUES.md`. The almond-milk → tree-nut classification gap is intent
 ## Current state
 
 **Last verified:** 2026-05-17
-**Last commit:** `29a7501` — Step 7f-2 (clickable tab strip; `?tab=audit` URL toggle retired).
-**App shell:** `src/App.jsx` wraps the tree in `<ReceiptsProvider>` + `<AllergensProvider>`, runs the pantry/recipes/cooked boot fetch, owns the pantry sync slice, exposes `updateRecipePage`, mounts `<LarderBrand>` + a clickable tab strip + `<LarderFooter>` around the active view. Tab state is in-memory only (no URL sync, canonical-faithful).
-**Smoke test:** ✅ localhost:5173 default-loads Pantry, click switches to Stats; tab-subtitle renders for Pantry (canonical text), hides for Stats (empty per canonical); `?tab=audit` URL no longer steers state; reload resets to Pantry; LarderBrand/Footer + Pantry sync + Audit KPIs all retain 7d/7e/7f-1 green status.
+**Last commit:** `HEAD` — Step 7f-3 (TabIcon SVG port: modern monoline + retro pixel-art, all 6 kinds; live style swap via CustomEvent). See `git show HEAD` for the actual hash; next session should bump this line to that hash per the update protocol.
+**App shell:** `src/App.jsx` wraps the tree in `<ReceiptsProvider>` + `<AllergensProvider>`, runs the pantry/recipes/cooked boot fetch, owns the pantry sync slice, exposes `updateRecipePage`, mounts `<LarderBrand>` + a clickable tab strip with `<TabIcon>` glyphs + `<LarderFooter>` around the active view. Tab state is in-memory only (no URL sync, canonical-faithful).
+**Smoke test:** ✅ localhost:5173 default-loads Pantry, click switches to Stats; tab icons render in both modern (forest-green monoline) and retro (pixel-art) styles; LarderBrand's style toggle live-swaps icons via the `larder-brand-style-change` CustomEvent; retro selection persists across reload; LarderBrand/Footer + Pantry sync + Audit KPIs all retain prior green status.
 
 ### Completed
 - Vite scaffold (package.json, vite.config.js, index.html, main.jsx, App.jsx)
@@ -121,11 +122,12 @@ See `KNOWN_ISSUES.md`. The almond-milk → tree-nut classification gap is intent
 - `src/components/AuditView.jsx` (~330 lines, verbatim port of canonical L4485–4809 incl. co-located GapCard — step 7e)
 - `src/components/LarderBrand.jsx` (~155 lines, verbatim port of canonical L4824–4960 — step 7f-1; favicon DOM swap deferred per A2)
 - `src/components/LarderFooter.jsx` (~16 lines, verbatim port of canonical L4961–4970 — step 7f-1)
+- `src/components/TabIcon.jsx` (~360 lines, verbatim port of canonical L4977–5345 — step 7f-3; `useBrandStyle()` hook co-located; all 6 kinds × 2 styles; pure inline SVG, no image files)
 - `larder/public/icons/larder-retro-192.png` (single icon for LarderBrand's retro-jar inline `<img>` — step 7f-1, decision A2b; other icons + favicon `<link>`s still deferred)
-- `src/App.jsx` wires Provider wrap + boot fetch + pantry sync slice + `updateRecipePage` + brand chrome + clickable tab strip (steps 7d / 7e / 7f-1 / 7f-2)
+- `src/App.jsx` wires Provider wrap + boot fetch + pantry sync slice + `updateRecipePage` + brand chrome + tab strip with TabIcon glyphs (steps 7d / 7e / 7f-1 / 7f-2 / 7f-3)
 - Canonical `<style>` block inlined into `larder/index.html` for CSS parity (step 7d)
 - `KNOWN_ISSUES.md`
-- `npm run build` green (44 modules)
+- `npm run build` green (45 modules)
 
 #### 7d — App-scope pantry sync slice ported (Completed 2026-05-17)
 
@@ -202,15 +204,28 @@ Smoke tests:
 - **Reload resets to Pantry: PASSED.** No URL sync, no in-memory persistence (B1).
 - **No regressions: PASSED.** Pantry toggles + Audit KPIs + LarderBrand style toggle + Footer all retain prior green status.
 
+#### 7f-3 — TabIcon SVG port (Completed 2026-05-17)
+
+Verbatim port of canonical L4977–5345 into `src/components/TabIcon.jsx`. The `useBrandStyle()` custom hook lives at the top of the same file (decision B1) — single consumer today, mirrors canonical pattern. All 6 `kind` branches (planner / recipes / pantry / gaps / tesco / audit) ported for both modern and retro styles (decision C1) even though only `pantry` + `audit` are reachable from the current tab strip — future view ports just add to App.jsx's `tabs` array.
+
+Pure inline SVG: no image-file dependencies. Modern style = monoline forest-green SVG; retro style = pixel-art via discrete `<rect>` elements (palette: olive bg `#b9c660`, terracotta `#f0743c`, cream `#fcf0c8`, dark-brown outline `#3e200c`).
+
+`src/App.jsx` change: small. Added `import TabIcon` and wrapped each navtab button label with the canonical `<span style="inline-flex, gap:6">` + `<TabIcon kind={k}/>`.
+
+Live style swap: when LarderBrand's style pills toggle, LarderBrand dispatches the `larder-brand-style-change` CustomEvent. `useBrandStyle()` inside TabIcon listens for that event and re-renders both tab icons in the new style — no prop drilling required.
+
+Smoke tests:
+- **Modern boot: PASSED.** Pantry icon = mini brand jar; Stats icon = three ascending bars; both forest-green monoline. Pixel-identical to canonical.
+- **Retro toggle live swap: PASSED.** Click retro pill → jar swaps AND both tab icons swap to pixel-art within the same render. Verifies the CustomEvent listener fires.
+- **Persistence: PASSED.** Refresh with retro selected → icons load directly in retro mode (localStorage read in `useBrandStyle`).
+- **Canonical parity: PASSED.** Both icons render identically to canonical PWA's Stats tab at 16px.
+- **No regressions: PASSED.** Tab clicking, view switching, LarderBrand/Footer all intact.
+
 ### Next
 
 #### 7d-followup — verify `qty_adjustment` debounce coalescing
 
 Confirm that rapid clicks on the qty +/− buttons within a 150ms window produce a single coalesced PATCH (not one-per-click). Test approach: pin App in React DevTools, watch hooks 15 (`qtyDebounceTimers`) and 16 (`pendingQtyValues`); fire 5+ clicks programmatically via `$r` or a console snippet to guarantee sub-150ms cadence; expect one PATCH with cumulative value. Server-write correctness already proven in 7d. Pure optimisation verification.
-
-#### 7f-3 — `TabIcon` SVG port
-
-Verbatim port of canonical L4990–5347 (~358 lines, mostly inline SVG paths per tab × brand-style combo). Subscribes to the `larder-brand-style-change` CustomEvent that LarderBrand already dispatches. Pure polish — tabs already function as text labels post-7f-2.
 
 #### 7f-followup — favicon `<link>` swap + full icons folder
 

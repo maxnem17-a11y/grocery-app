@@ -16,6 +16,7 @@ import PantryView from "./components/PantryView.jsx";
 import AuditView from "./components/AuditView.jsx";
 import LarderBrand from "./components/LarderBrand.jsx";
 import LarderFooter from "./components/LarderFooter.jsx";
+import TabIcon from "./components/TabIcon.jsx";
 import { ReceiptsProvider, useReceipts } from "./contexts/ReceiptsContext.jsx";
 import { AllergensProvider } from "./contexts/AllergensContext.jsx";
 
@@ -478,7 +479,10 @@ function AppInner() {
     <div className="flex flex-wrap gap-0 mb-1 border-b border-stone-200">
       {tabs.map(([k, l]) => (
         <button key={k} data-active={tab === k} onClick={() => setTab(k)} className="navtab">
-          {l}
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <TabIcon kind={k}/>
+            {l}
+          </span>
         </button>
       ))}
     </div>
