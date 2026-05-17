@@ -100,7 +100,7 @@ See `KNOWN_ISSUES.md`. The almond-milk → tree-nut classification gap is intent
 ## Current state
 
 **Last verified:** 2026-05-17
-**Last commit:** `HEAD` — Step 7f-2 (clickable tab strip; `?tab=audit` URL toggle retired). See `git show HEAD` for the actual hash; next session should bump this line to that hash per the update protocol.
+**Last commit:** `29a7501` — Step 7f-2 (clickable tab strip; `?tab=audit` URL toggle retired).
 **App shell:** `src/App.jsx` wraps the tree in `<ReceiptsProvider>` + `<AllergensProvider>`, runs the pantry/recipes/cooked boot fetch, owns the pantry sync slice, exposes `updateRecipePage`, mounts `<LarderBrand>` + a clickable tab strip + `<LarderFooter>` around the active view. Tab state is in-memory only (no URL sync, canonical-faithful).
 **Smoke test:** ✅ localhost:5173 default-loads Pantry, click switches to Stats; tab-subtitle renders for Pantry (canonical text), hides for Stats (empty per canonical); `?tab=audit` URL no longer steers state; reload resets to Pantry; LarderBrand/Footer + Pantry sync + Audit KPIs all retain 7d/7e/7f-1 green status.
 
