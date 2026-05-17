@@ -203,6 +203,80 @@ export function mapReceiptRow(row) {
   };
 }
 
+// Map a Supabase cooked_log row → the local cooked-log entry shape.
+// The DB schema uses recipe_id / cooked_date; the UI was written
+// against meal_id / date (pre-Supabase, when entries lived only in
+// localStorage). This translation keeps the boot fetch from forcing
+// a UI-wide rename for a single column-name preference.
+//
+// Extracted from canonical index.html L897–907.
+export function mapCookedRow(row) {
+  return {
+    id: row.id,
+    meal_id: row.recipe_id,
+    date: row.cooked_date,
+    name: row.recipe_name,
+    source: row.source_file,
+    audience: row.audience,
+    protein_per_serving_g: row.protein_per_serving_g,
+  };
+}
+
+// Map a Supabase recipe row → the shape the existing UI expects.
+// The UI's loadRecipes() previously flattened many separate arrays
+// (east_curries, dishoom, etc.) into one list, tagging each with a
+// _source_file like "east-curries". Supabase has no source_file
+// column, so we derive it from (source_type, source_title).
+//
+// Extracted from canonical index.html L914–956 (mapRecipeRow +
+// the deriveSourceFile helper it depends on). The page number
+// lives at source.page; updateRecipePage (App-scope) mutates it
+// via patchRecipeRow on { source_page: nextPage }.
+function deriveSourceFile(row) {
+  const t = (row.source_title || "").toLowerCase();
+  const st = (row.source_type || "").toLowerCase();
+  if (st === "instagram") return "instagram-recipes";
+  if (st === "web") return "saved-links";
+  if (t.startsWith("east")) {
+    // East has 5 chapters but a single source_title — best we can do
+    // is group all East recipes under one label. UI just uses it for
+    // grouping/display.
+    return "east";
+  }
+  if (t.includes("ottolenghi")) return "ottolenghi-simple";
+  if (t.includes("dishoom")) return "dishoom";
+  if (t.includes("africana")) return "africana";
+  if (t.includes("west winds")) return "west-winds";
+  return st || "unknown";
+}
+
+export function mapRecipeRow(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    source: {
+      type: row.source_type,
+      title: row.source_title,
+      page: row.source_page,
+      url: row.source_url,
+      author: row.source_author,
+      date: row.source_date,
+    },
+    servings: row.servings,
+    prep_time_mins: row.prep_time_mins,
+    cook_time_mins: row.cook_time_mins,
+    tags: row.tags || [],
+    audience: row.audience,
+    eaters: row.eaters || [],
+    ingredients: row.ingredients || [],
+    protein_per_serving_g: row.protein_per_serving_g,
+    makeable_pct: null,
+    notes: row.notes,
+    steps: row.steps || [],
+    _source_file: deriveSourceFile(row),
+  };
+}
+
 // Map a Supabase pantry_items row → the shape PantryView and the App-scope
 // sync model expect. Columns ride through unchanged except for the four
 // _underscore-prefixed passthroughs (out_of_stock, qty_adjustment,

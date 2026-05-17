@@ -1,25 +1,27 @@
 // ============================================================
 // Primitives — small presentational components
 // ============================================================
-// Verbatim extraction from canonical index.html (L1249–1361)
-// during the Vite migration. Behaviour matches the canonical
-// file exactly. Co-extracted in step 7d alongside PantryView,
-// per CLAUDE.md migration principle #5 (don't pre-extract).
+// Verbatim extractions from canonical index.html. Co-extracted
+// in step 7d (InfoTip / SortHeader / Chip / Bar / Stat) and
+// step 7e (Section, alongside AuditView), per CLAUDE.md
+// migration principle #5 (don't pre-extract).
 //
 // Contents (in canonical-file order):
-//   - InfoTip       L1249–1265
-//   - SortHeader    L1272–1295
-//   - Chip          L1319–1329
-//   - Bar           L1335–1338
-//   - Stat          L1339–1361   (uses <InfoTip> internally)
+//   - InfoTip       L1249–1265   (step 7d)
+//   - SortHeader    L1272–1295   (step 7d)
+//   - Chip          L1319–1329   (step 7d)
+//   - Bar           L1335–1338   (step 7d)
+//   - Stat          L1339–1361   (step 7d; uses <InfoTip> internally)
+//   - Section       L1362–1385   (step 7e; uses <InfoTip> internally)
 //
 // Deliberately omitted from this file:
-//   - HelpBanner (L1297–1318)    — not used by PantryView
-//   - AudienceTag (L1330–1334)   — not used by PantryView
-//   - Section (L1362–1387)       — not used by PantryView
+//   - HelpBanner (L1297–1318)    — not used by PantryView or AuditView
+//   - AudienceTag (L1330–1334)   — not used by PantryView or AuditView
 // These can be appended here when a later view extraction
 // needs them; same file, no parallel primitives module.
 // ============================================================
+
+import { useState } from "react";
 
 export function InfoTip({ children, align = "center" }) {
   // children = the explanatory text. Renders a small ⓘ icon; reveals on hover/focus.
@@ -85,6 +87,31 @@ export function Chip({ tone = "neutral", children, title }) {
 export function Bar({ pct, color }) {
   const c = color || (pct >= 70 ? "#16a34a" : pct >= 40 ? "#d97706" : "#dc2626");
   return <div className="bar"><div style={{ width: `${pct}%`, background: c }} /></div>;
+}
+
+export function Section({ title, subtitle, tone, children, collapsible = false, defaultOpen = true, tip }) {
+  const map = { warn: "border-amber-200 bg-amber-50/40", ok: "border-emerald-200 bg-emerald-50/30", info: "border-blue-200 bg-blue-50/30", accent: "border-violet-200 bg-violet-50/30", neutral: "" };
+  const [open, setOpen] = useState(defaultOpen);
+  const isOpen = collapsible ? open : true;
+  const headerProps = collapsible ? {
+    role: "button",
+    tabIndex: 0,
+    onClick: () => setOpen(o => !o),
+    onKeyDown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen(o => !o); } },
+    "aria-expanded": isOpen,
+    className: "flex items-baseline justify-between flex-wrap gap-2 cursor-pointer select-none " + (isOpen ? "mb-3" : "mb-0"),
+  } : { className: "flex items-baseline justify-between mb-3 flex-wrap gap-2" };
+  return <div className={`card p-4 ${map[tone] || ""}`}>
+    <div {...headerProps}>
+      <h3 className="text-lg font-semibold flex items-center gap-2">
+        {collapsible && <span className="text-stone-400 text-sm w-3 inline-block">{isOpen ? "▼" : "▶"}</span>}
+        <span>{title}</span>
+        {tip && <InfoTip>{tip}</InfoTip>}
+      </h3>
+      {subtitle && <span className="text-xs text-stone-500">{subtitle}</span>}
+    </div>
+    {isOpen && children}
+  </div>;
 }
 
 export function Stat({ label, value, tone, sub, tip, tipAlign, onClick, expanded }) {
