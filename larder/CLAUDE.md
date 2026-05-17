@@ -94,7 +94,7 @@ See `KNOWN_ISSUES.md`. The almond-milk → tree-nut classification gap is intent
 ## Current state
 
 **Last verified:** 2026-05-17
-**Last commit:** `HEAD` — Step 7e (AuditView + AllergensContext + recipes module state + `?tab=audit` toggle). See `git show HEAD` for the actual hash; next session should bump this line to that hash per the update protocol.
+**Last commit:** `424c2cf` — Step 7e (AuditView + AllergensContext + recipes module state + `?tab=audit` toggle).
 **App shell:** `src/App.jsx` is the real app shell — wraps the tree in `<ReceiptsProvider>` + `<AllergensProvider>`, runs the pantry/recipes/cooked boot fetch, owns the pantry sync slice, exposes `updateRecipePage`, and switches between PantryView and AuditView via the `?tab=audit` query param.
 **Smoke test:** ✅ localhost:5173 renders both Pantry (default) and Stats (`?tab=audit`) tabs against live Supabase; all parity counters match canonical PWA side-by-side; recipe page-number write path server-confirmed via MCP (integer 42 round-trip + reset).
 
