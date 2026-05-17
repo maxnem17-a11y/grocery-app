@@ -101,7 +101,7 @@ See `KNOWN_ISSUES.md`. The almond-milk → tree-nut classification gap is intent
 ## Current state
 
 **Last verified:** 2026-05-17
-**Last commit:** `HEAD` — Step 7f-3 (TabIcon SVG port: modern monoline + retro pixel-art, all 6 kinds; live style swap via CustomEvent). See `git show HEAD` for the actual hash; next session should bump this line to that hash per the update protocol.
+**Last commit:** `79360e5` — Step 7f-3 (TabIcon SVG port: modern monoline + retro pixel-art, all 6 kinds; live style swap via CustomEvent).
 **App shell:** `src/App.jsx` wraps the tree in `<ReceiptsProvider>` + `<AllergensProvider>`, runs the pantry/recipes/cooked boot fetch, owns the pantry sync slice, exposes `updateRecipePage`, mounts `<LarderBrand>` + a clickable tab strip with `<TabIcon>` glyphs + `<LarderFooter>` around the active view. Tab state is in-memory only (no URL sync, canonical-faithful).
 **Smoke test:** ✅ localhost:5173 default-loads Pantry, click switches to Stats; tab icons render in both modern (forest-green monoline) and retro (pixel-art) styles; LarderBrand's style toggle live-swaps icons via the `larder-brand-style-change` CustomEvent; retro selection persists across reload; LarderBrand/Footer + Pantry sync + Audit KPIs all retain prior green status.
 
