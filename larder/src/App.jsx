@@ -35,12 +35,15 @@ import { AllergensProvider } from "./contexts/AllergensContext.jsx";
 //     error. Mirrors the optimistic-write pattern from 7d's pantry
 //     sync slice; AuditView's drilldown is the only caller today.
 //
-// TODO(7f): remove the ?tab=audit query param toggle and replace
-// with real tab chrome (LarderBrand + tab strip from canonical
-// L4824–4960 + L5555–5570). Chosen for 7e because it has zero UI
-// surface to design and lets us A/B against the canonical PWA
-// (open localhost:5173/?tab=audit alongside the live HTML to
-// compare KPI numbers and section content directly).
+// 7f-1 added <LarderBrand> + <LarderFooter> around the active view
+// (verbatim ports of canonical L4824–4960 + L4961–4970), plus
+// suggestNextDelivery from canonical L4157 for the brand's
+// delivery subtitle.
+//
+// 7f-2 replaced the 7e ?tab=audit URL toggle with a clickable
+// tab strip below <LarderBrand>. Tab state is in-memory only —
+// no URL sync (canonical-faithful, decision B1). TabIcon polish
+// arrives in 7f-3; until then tabs are text labels.
 // ============================================================
 
 export default function App() {
@@ -85,14 +88,15 @@ function AppInner() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
 
-  // Tab toggle via ?tab=audit query param (7e). One-way URL → view
-  // binding only — manual URL editing switches tabs, there's no tab
-  // strip UI yet. See TODO(7f) at the top of this file.
-  const [tab] = useState(() => {
-    if (typeof window === "undefined") return "pantry";
-    const params = new URLSearchParams(window.location.search);
-    return params.get("tab") === "audit" ? "audit" : "pantry";
-  });
+  // Tab state. Default to Pantry; click handlers on the tab strip
+  // below LarderBrand call setTab. No URL sync — matches canonical
+  // (decision B1 in step 7f-2). New views grow the `tabs` array.
+  const [tab, setTab] = useState("pantry");
+  const tabs = [
+    ["pantry", "Pantry", "Everything currently in the kitchen, with expiry and confidence tracking. Mark items out of stock if you've used them up."],
+    ["audit", "Stats", ""],
+  ];
+  const currentTabMeta = tabs.find(t => t[0] === tab);
 
   // ===== LarderBrand inputs (7f-1) =====
   // receipts comes from ReceiptsContext (Provider mounted in the outer
@@ -471,6 +475,14 @@ function AppInner() {
 
   return <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-10">
     <LarderBrand pantry={pantry} nextDelivery={nextDelivery} />
+    <div className="flex flex-wrap gap-0 mb-1 border-b border-stone-200">
+      {tabs.map(([k, l]) => (
+        <button key={k} data-active={tab === k} onClick={() => setTab(k)} className="navtab">
+          {l}
+        </button>
+      ))}
+    </div>
+    {currentTabMeta && currentTabMeta[2] && <div className="tab-subtitle">{currentTabMeta[2]}</div>}
     {tab === "audit"
       ? <AuditView
           pantry={pantry}

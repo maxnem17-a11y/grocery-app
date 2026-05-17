@@ -34,7 +34,7 @@ grocery-app/                ← git root
     │       └── larder-retro-192.png  ← retro jar (LarderBrand inline img); favicon swap still deferred
     └── src/
         ├── main.jsx
-        ├── App.jsx                ← app shell: Provider wrap + boot fetch + brand chrome + ?tab=audit toggle + pantry sync slice
+        ├── App.jsx                ← app shell: Provider wrap + boot fetch + brand chrome + clickable tab strip + pantry sync slice
         ├── lib/
         │   ├── supabase.js        ← sbFetch / sbWrite + mapReceiptRow / mapPantryRow / mapRecipeRow / mapCookedRow / patchPantryRow / patchRecipeRow
         │   ├── text.js            ← string normalisation
@@ -100,9 +100,9 @@ See `KNOWN_ISSUES.md`. The almond-milk → tree-nut classification gap is intent
 ## Current state
 
 **Last verified:** 2026-05-17
-**Last commit:** `0b5c0e3` — Step 7f-1 (LarderBrand + LarderFooter + suggestNextDelivery).
-**App shell:** `src/App.jsx` wraps the tree in `<ReceiptsProvider>` + `<AllergensProvider>`, runs the pantry/recipes/cooked boot fetch, owns the pantry sync slice, exposes `updateRecipePage`, mounts `<LarderBrand>` + `<LarderFooter>` around the active view, and switches between PantryView and AuditView via the `?tab=audit` query param (real tab strip lands in 7f-2).
-**Smoke test:** ✅ localhost:5173 renders LarderBrand + view + LarderFooter against live Supabase; brand jar (modern + retro) renders correctly, style toggle persists across reload, delivery subtitle "Delivery in 6 days" matches canonical projection (2026-05-23 from latest 2026-05-11 + 12-day avg gap); Pantry and Audit tabs retain 7d/7e green status.
+**Last commit:** `HEAD` — Step 7f-2 (clickable tab strip; `?tab=audit` URL toggle retired). See `git show HEAD` for the actual hash; next session should bump this line to that hash per the update protocol.
+**App shell:** `src/App.jsx` wraps the tree in `<ReceiptsProvider>` + `<AllergensProvider>`, runs the pantry/recipes/cooked boot fetch, owns the pantry sync slice, exposes `updateRecipePage`, mounts `<LarderBrand>` + a clickable tab strip + `<LarderFooter>` around the active view. Tab state is in-memory only (no URL sync, canonical-faithful).
+**Smoke test:** ✅ localhost:5173 default-loads Pantry, click switches to Stats; tab-subtitle renders for Pantry (canonical text), hides for Stats (empty per canonical); `?tab=audit` URL no longer steers state; reload resets to Pantry; LarderBrand/Footer + Pantry sync + Audit KPIs all retain 7d/7e/7f-1 green status.
 
 ### Completed
 - Vite scaffold (package.json, vite.config.js, index.html, main.jsx, App.jsx)
@@ -122,7 +122,7 @@ See `KNOWN_ISSUES.md`. The almond-milk → tree-nut classification gap is intent
 - `src/components/LarderBrand.jsx` (~155 lines, verbatim port of canonical L4824–4960 — step 7f-1; favicon DOM swap deferred per A2)
 - `src/components/LarderFooter.jsx` (~16 lines, verbatim port of canonical L4961–4970 — step 7f-1)
 - `larder/public/icons/larder-retro-192.png` (single icon for LarderBrand's retro-jar inline `<img>` — step 7f-1, decision A2b; other icons + favicon `<link>`s still deferred)
-- `src/App.jsx` wires Provider wrap + boot fetch + pantry sync slice + `updateRecipePage` + brand chrome (steps 7d / 7e / 7f-1)
+- `src/App.jsx` wires Provider wrap + boot fetch + pantry sync slice + `updateRecipePage` + brand chrome + clickable tab strip (steps 7d / 7e / 7f-1 / 7f-2)
 - Canonical `<style>` block inlined into `larder/index.html` for CSS parity (step 7d)
 - `KNOWN_ISSUES.md`
 - `npm run build` green (44 modules)
@@ -182,15 +182,31 @@ Smoke tests:
 - **LarderFooter: PASSED.** Italic Georgia sign-off renders below.
 - **No 7d/7e regressions: PASSED.** PantryView toggles + AuditView KPIs unchanged.
 
+#### 7f-2 — click-driven tab navigation (Completed 2026-05-17)
+
+Replaced the 7e `?tab=audit` URL toggle with a click-driven tab strip below `<LarderBrand>`. Verbatim of canonical's tab-strip pattern at L6019–6029 (the `.navtab` button row + conditional `.tab-subtitle`), trimmed to the two currently-implemented tabs.
+
+`src/App.jsx` changes:
+- `useState` initialiser now `useState("pantry")` — no URL reading. Removed the `URLSearchParams` import-site lookup entirely (decision B1, canonical-faithful).
+- `tabs` array defined inline with two entries: `["pantry", "Pantry", <description>]` and `["audit", "Stats", ""]`. Grows naturally as new views land (decision A1).
+- Tab-strip JSX (`.navtab` buttons with `data-active`) and conditional `.tab-subtitle` rendered below `<LarderBrand>` and above the view-switch.
+- `TODO(7f)` comment block at top of file stripped (decision C1).
+
+CSS classes `.navtab` + `.navtab[data-active="true"]` + `.tab-subtitle` were already in `larder/index.html` from the 7d canonical CSS paste — no styling work.
+
+Smoke tests:
+- **Default load + tab highlight + subtitle: PASSED.** Pantry highlighted on boot, full subtitle rendered.
+- **Click Stats: PASSED.** Highlight swaps; subtitle disappears (audit's empty third element); AuditView mounts.
+- **Click Pantry: PASSED.** Round-trip; subtitle reappears; PantryView mounts.
+- **URL reader removed: PASSED.** `localhost:5173/?tab=audit` lands on Pantry (URL no longer steers state).
+- **Reload resets to Pantry: PASSED.** No URL sync, no in-memory persistence (B1).
+- **No regressions: PASSED.** Pantry toggles + Audit KPIs + LarderBrand style toggle + Footer all retain prior green status.
+
 ### Next
 
 #### 7d-followup — verify `qty_adjustment` debounce coalescing
 
 Confirm that rapid clicks on the qty +/− buttons within a 150ms window produce a single coalesced PATCH (not one-per-click). Test approach: pin App in React DevTools, watch hooks 15 (`qtyDebounceTimers`) and 16 (`pendingQtyValues`); fire 5+ clicks programmatically via `$r` or a console snippet to guarantee sub-150ms cadence; expect one PATCH with cumulative value. Server-write correctness already proven in 7d. Pure optimisation verification.
-
-#### 7f-2 — click-driven tab navigation (replace `?tab=audit`)
-
-Remove the URL query-param reader in `AppInner`, add `tab` state with a setter, mount a minimal text-label tab strip below `<LarderBrand>` (no TabIcon yet — that's 7f-3). Strip the `TODO(7f)` comment at the top of `src/App.jsx`. Optional: add `history.pushState` for URL sync on click (canonical doesn't have this — defer unless asked).
 
 #### 7f-3 — `TabIcon` SVG port
 
