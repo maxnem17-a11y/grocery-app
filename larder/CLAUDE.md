@@ -100,7 +100,7 @@ See `KNOWN_ISSUES.md`. The almond-milk → tree-nut classification gap is intent
 ## Current state
 
 **Last verified:** 2026-05-17
-**Last commit:** `HEAD` — Step 7f-1 (LarderBrand + LarderFooter + suggestNextDelivery). See `git show HEAD` for the actual hash; next session should bump this line to that hash per the update protocol.
+**Last commit:** `0b5c0e3` — Step 7f-1 (LarderBrand + LarderFooter + suggestNextDelivery).
 **App shell:** `src/App.jsx` wraps the tree in `<ReceiptsProvider>` + `<AllergensProvider>`, runs the pantry/recipes/cooked boot fetch, owns the pantry sync slice, exposes `updateRecipePage`, mounts `<LarderBrand>` + `<LarderFooter>` around the active view, and switches between PantryView and AuditView via the `?tab=audit` query param (real tab strip lands in 7f-2).
 **Smoke test:** ✅ localhost:5173 renders LarderBrand + view + LarderFooter against live Supabase; brand jar (modern + retro) renders correctly, style toggle persists across reload, delivery subtitle "Delivery in 6 days" matches canonical projection (2026-05-23 from latest 2026-05-11 + 12-day avg gap); Pantry and Audit tabs retain 7d/7e green status.
 
