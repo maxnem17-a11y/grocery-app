@@ -20,7 +20,7 @@ grocery-app/                ← git root
 ├── index.html              ← canonical / live PWA (~414KB). Source of truth until Vite ships.
 ├── manifest.json           ← PWA manifest
 ├── service-worker.js       ← PWA service worker
-├── icons/                  ← PWA icons
+├── icons/                  ← PWA icons (canonical PNGs; copied selectively into larder/public/icons/)
 ├── README.md
 └── larder/                 ← Vite migration target
     ├── CREDENTIALS.md      ← Supabase keys. Gitignored. Don't commit.
@@ -29,23 +29,29 @@ grocery-app/                ← git root
     ├── index.html          ← Vite entry + canonical <style> block L30–97 inlined for CSS parity
     ├── package.json
     ├── vite.config.js
+    ├── public/
+    │   └── icons/
+    │       └── larder-retro-192.png  ← retro jar (LarderBrand inline img); favicon swap still deferred
     └── src/
         ├── main.jsx
-        ├── App.jsx                ← app shell: Provider wrap + boot fetch + ?tab=audit toggle + pantry sync slice
+        ├── App.jsx                ← app shell: Provider wrap + boot fetch + brand chrome + ?tab=audit toggle + pantry sync slice
         ├── lib/
         │   ├── supabase.js        ← sbFetch / sbWrite + mapReceiptRow / mapPantryRow / mapRecipeRow / mapCookedRow / patchPantryRow / patchRecipeRow
         │   ├── text.js            ← string normalisation
         │   ├── allergens.js       ← Khalil/Max/Emily filter logic
         │   ├── pantry-math.js     ← pure pantry/confidence calculations
         │   ├── household-rules.js ← never_restock patterns
-        │   └── recipes.js         ← module-level RECIPES + getRecipes / setRecipes (refactor target — see 7h)
+        │   ├── recipes.js         ← module-level RECIPES + getRecipes / setRecipes (refactor target — see 7h)
+        │   └── delivery.js        ← suggestNextDelivery(receipts) — receipt cadence → next predicted delivery
         ├── contexts/
-        │   ├── ReceiptsContext.jsx  ← receipts data + load state (consumed by AuditView)
+        │   ├── ReceiptsContext.jsx  ← receipts data + load state (consumed by AuditView + LarderBrand inputs)
         │   └── AllergensContext.jsx ← allergens config + load state (consumed by AuditView)
         └── components/
             ├── primitives.jsx     ← InfoTip / SortHeader / Chip / Bar / Stat / Section
             ├── PantryView.jsx     ← Pantry tab, verbatim port of canonical L1388–1617
-            └── AuditView.jsx      ← Stats tab, verbatim port of canonical L4485–4809 (incl. co-located GapCard)
+            ├── AuditView.jsx      ← Stats tab, verbatim port of canonical L4485–4809 (incl. co-located GapCard)
+            ├── LarderBrand.jsx    ← brand block: jar SVG/PNG + style toggle + delivery subtitle (favicon swap deferred — A2)
+            └── LarderFooter.jsx   ← "What's in your kitchen?" sign-off
 ```
 
 ---
@@ -94,9 +100,9 @@ See `KNOWN_ISSUES.md`. The almond-milk → tree-nut classification gap is intent
 ## Current state
 
 **Last verified:** 2026-05-17
-**Last commit:** `424c2cf` — Step 7e (AuditView + AllergensContext + recipes module state + `?tab=audit` toggle).
-**App shell:** `src/App.jsx` is the real app shell — wraps the tree in `<ReceiptsProvider>` + `<AllergensProvider>`, runs the pantry/recipes/cooked boot fetch, owns the pantry sync slice, exposes `updateRecipePage`, and switches between PantryView and AuditView via the `?tab=audit` query param.
-**Smoke test:** ✅ localhost:5173 renders both Pantry (default) and Stats (`?tab=audit`) tabs against live Supabase; all parity counters match canonical PWA side-by-side; recipe page-number write path server-confirmed via MCP (integer 42 round-trip + reset).
+**Last commit:** `HEAD` — Step 7f-1 (LarderBrand + LarderFooter + suggestNextDelivery). See `git show HEAD` for the actual hash; next session should bump this line to that hash per the update protocol.
+**App shell:** `src/App.jsx` wraps the tree in `<ReceiptsProvider>` + `<AllergensProvider>`, runs the pantry/recipes/cooked boot fetch, owns the pantry sync slice, exposes `updateRecipePage`, mounts `<LarderBrand>` + `<LarderFooter>` around the active view, and switches between PantryView and AuditView via the `?tab=audit` query param (real tab strip lands in 7f-2).
+**Smoke test:** ✅ localhost:5173 renders LarderBrand + view + LarderFooter against live Supabase; brand jar (modern + retro) renders correctly, style toggle persists across reload, delivery subtitle "Delivery in 6 days" matches canonical projection (2026-05-23 from latest 2026-05-11 + 12-day avg gap); Pantry and Audit tabs retain 7d/7e green status.
 
 ### Completed
 - Vite scaffold (package.json, vite.config.js, index.html, main.jsx, App.jsx)
@@ -107,15 +113,19 @@ See `KNOWN_ISSUES.md`. The almond-milk → tree-nut classification gap is intent
 - `src/lib/pantry-math.js` (~135 lines)
 - `src/lib/household-rules.js` (34 lines, never_restock patterns from RAW blob — step 7b)
 - `src/lib/recipes.js` (~45 lines, module-level RECIPES + getRecipes / setRecipes — step 7e; refactor target 7h)
-- `src/contexts/ReceiptsContext.jsx` (~57 lines, ReceiptsProvider + useReceipts hook — step 7c, consumed by AuditView from 7e)
+- `src/lib/delivery.js` (~65 lines, `suggestNextDelivery(receipts)` — step 7f-1)
+- `src/contexts/ReceiptsContext.jsx` (~57 lines, ReceiptsProvider + useReceipts hook — step 7c, consumed by AuditView from 7e + by App for nextDelivery in 7f-1)
 - `src/contexts/AllergensContext.jsx` (~75 lines, AllergensProvider + useAllergens hook, EMPTY_ALLERGENS fallback — step 7e)
 - `src/components/primitives.jsx` (~135 lines, InfoTip / SortHeader / Chip / Bar / Stat — step 7a/7d; Section appended in 7e)
 - `src/components/PantryView.jsx` (~232 lines, verbatim port of canonical L1388–1617 — step 7d)
 - `src/components/AuditView.jsx` (~330 lines, verbatim port of canonical L4485–4809 incl. co-located GapCard — step 7e)
-- `src/App.jsx` rewritten with Provider wrap, parallel boot fetch, `updateRecipePage` callback, `?tab=audit` toggle (step 7e)
+- `src/components/LarderBrand.jsx` (~155 lines, verbatim port of canonical L4824–4960 — step 7f-1; favicon DOM swap deferred per A2)
+- `src/components/LarderFooter.jsx` (~16 lines, verbatim port of canonical L4961–4970 — step 7f-1)
+- `larder/public/icons/larder-retro-192.png` (single icon for LarderBrand's retro-jar inline `<img>` — step 7f-1, decision A2b; other icons + favicon `<link>`s still deferred)
+- `src/App.jsx` wires Provider wrap + boot fetch + pantry sync slice + `updateRecipePage` + brand chrome (steps 7d / 7e / 7f-1)
 - Canonical `<style>` block inlined into `larder/index.html` for CSS parity (step 7d)
 - `KNOWN_ISSUES.md`
-- `npm run build` green (41 modules)
+- `npm run build` green (44 modules)
 
 #### 7d — App-scope pantry sync slice ported (Completed 2026-05-17)
 
@@ -147,15 +157,52 @@ Smoke tests:
 - **(f) Audience breakdown Section: PASSED.** Whole-household / Needs check / Adults only counts matched canonical; by-source-file rows identical.
 - **(c) Recipe page-number coverage drilldown UI: PASSED.** KPI strip, by-book ordering, expand/collapse, recipe-name list, and input placeholders all matched canonical.
 
+#### 7f-1 — LarderBrand + LarderFooter + suggestNextDelivery (Completed 2026-05-17)
+
+First sub-step of the 7f tab-chrome port: brand block above the view, delivery subtitle wired to receipt cadence, footer below. Tab navigation still uses the `?tab=audit` query param from 7e — that gets replaced in 7f-2.
+
+Verbatim ports from canonical:
+- `src/components/LarderBrand.jsx` ← canonical L4824–4960 (modern jar SVG + retro PNG-overlay + style toggle + delivery subtitle + style buttons)
+- `src/components/LarderFooter.jsx` ← canonical L4961–4970 (italic Georgia "What's in your kitchen?" sign-off)
+- `src/lib/delivery.js` ← canonical L4157 (`suggestNextDelivery`, pure function on receipts; reads `TODAY` from pantry-math)
+
+`src/App.jsx` adds `useReceipts()` inside `AppInner`, computes `nextDelivery = useMemo(() => suggestNextDelivery(receipts), [receipts])`, mounts `<LarderBrand pantry nextDelivery />` above the view-switch and `<LarderFooter />` below.
+
+Decisions taken in scope review:
+- **A2 / A2b — favicon DOM swap deferred; one icon copied.** Canonical's style-toggle effect rewrites `<link>` `href`s for `#favicon-touch` / `-192` / `-512`. Vite's `larder/index.html` has no such elements; deferred to a 7f-followup along with the broader icons plumbing. Inline TODO in `LarderBrand.jsx`. Single icon `larder-retro-192.png` copied into `larder/public/icons/` so the retro-jar inline `<img>` renders (decision A2b).
+- **B1 — localStorage `larder-brand-style` persisted verbatim.** Style choice survives reload.
+- **C — `larder-brand-style-change` CustomEvent dispatched verbatim.** No listener yet (TabIcon ports in 7f-3); fires harmlessly.
+- **D2 — `HelpBanner` deferred.** `setShowHelpBanner` left unpassed; the `? Help` button hides via the existing truthiness guard.
+
+Smoke tests:
+- **Brand block content: PASSED.** Wordmark, jar render, fillPct match canonical side-by-side.
+- **Style toggle + persistence (B1): PASSED.** Modern ↔ retro swap; reload preserves choice.
+- **Retro PNG render (A2b): PASSED.** `larder/public/icons/larder-retro-192.png` served correctly at `/icons/larder-retro-192.png`.
+- **Delivery subtitle: PASSED.** "Delivery in 6 days" — Supabase-projected `2026-05-23` from `latest=2026-05-11` + `avg_gap=12` matches canonical PWA.
+- **LarderFooter: PASSED.** Italic Georgia sign-off renders below.
+- **No 7d/7e regressions: PASSED.** PantryView toggles + AuditView KPIs unchanged.
+
 ### Next
 
 #### 7d-followup — verify `qty_adjustment` debounce coalescing
 
 Confirm that rapid clicks on the qty +/− buttons within a 150ms window produce a single coalesced PATCH (not one-per-click). Test approach: pin App in React DevTools, watch hooks 15 (`qtyDebounceTimers`) and 16 (`pendingQtyValues`); fire 5+ clicks programmatically via `$r` or a console snippet to guarantee sub-150ms cadence; expect one PATCH with cumulative value. Server-write correctness already proven in 7d. Pure optimisation verification.
 
-#### 7f — replace `?tab=audit` query param with real tab chrome
+#### 7f-2 — click-driven tab navigation (replace `?tab=audit`)
 
-7e mounts AuditView via a one-way URL → view binding (`?tab=audit`) with zero UI surface for navigation. Replace with the canonical tab chrome: extract `LarderBrand` (canonical L4824–4960), the tabs array (L5555–5562), and `TabIcon` (L4990–5347); wire active-tab state with a click-to-switch tab strip styled to match the canonical PWA. Remove the inline `TODO(7f)` comment at the top of `src/App.jsx` when this lands.
+Remove the URL query-param reader in `AppInner`, add `tab` state with a setter, mount a minimal text-label tab strip below `<LarderBrand>` (no TabIcon yet — that's 7f-3). Strip the `TODO(7f)` comment at the top of `src/App.jsx`. Optional: add `history.pushState` for URL sync on click (canonical doesn't have this — defer unless asked).
+
+#### 7f-3 — `TabIcon` SVG port
+
+Verbatim port of canonical L4990–5347 (~358 lines, mostly inline SVG paths per tab × brand-style combo). Subscribes to the `larder-brand-style-change` CustomEvent that LarderBrand already dispatches. Pure polish — tabs already function as text labels post-7f-2.
+
+#### 7f-followup — favicon `<link>` swap + full icons folder
+
+Add the three `<link>` elements (`#favicon-touch` / `-192` / `-512`) to `larder/index.html`'s head; copy the remaining icon PNGs from `grocery-app/icons/` into `larder/public/icons/`; restore the DOM-rewrite block in `LarderBrand.jsx`'s style `useEffect`. Inline TODO in `LarderBrand.jsx` marks the spot.
+
+#### 7f-helpbanner — `HelpBanner` extraction (D2 follow-up)
+
+Extract `HelpBanner` from canonical L1297–1318 into `primitives.jsx`; add `showHelpBanner` state + dismiss callback (canonical L5440) + `help-dismissed` localStorage key (`LS_KEY + ':help-dismissed'`) to `App.jsx`; pass `setShowHelpBanner` to `<LarderBrand>` so the `? Help` button surfaces. Independent of tab chrome — can land anytime.
 
 #### 7g — second view port (open: SuggestedBasket, OrdersView, PlannerView, RecipesView)
 

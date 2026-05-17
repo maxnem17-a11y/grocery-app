@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   SUPABASE,
   fetchCookedLog,
@@ -11,9 +11,12 @@ import {
   patchRecipeRow,
 } from "./lib/supabase.js";
 import { getRecipes, setRecipes } from "./lib/recipes.js";
+import { suggestNextDelivery } from "./lib/delivery.js";
 import PantryView from "./components/PantryView.jsx";
 import AuditView from "./components/AuditView.jsx";
-import { ReceiptsProvider } from "./contexts/ReceiptsContext.jsx";
+import LarderBrand from "./components/LarderBrand.jsx";
+import LarderFooter from "./components/LarderFooter.jsx";
+import { ReceiptsProvider, useReceipts } from "./contexts/ReceiptsContext.jsx";
 import { AllergensProvider } from "./contexts/AllergensContext.jsx";
 
 // ============================================================
@@ -90,6 +93,15 @@ function AppInner() {
     const params = new URLSearchParams(window.location.search);
     return params.get("tab") === "audit" ? "audit" : "pantry";
   });
+
+  // ===== LarderBrand inputs (7f-1) =====
+  // receipts comes from ReceiptsContext (Provider mounted in the outer
+  // App wrapper). nextDelivery is derived from receipt cadence — the
+  // brand block uses it for the "Delivery in N days" subtitle and to
+  // brass the modern jar's lid on delivery day. Memoised on receipts so
+  // we don't recompute every render.
+  const { receipts } = useReceipts();
+  const nextDelivery = useMemo(() => suggestNextDelivery(receipts), [receipts]);
 
   // ---- Fetch pantry + recipes + cooked on mount ----
   // ReceiptsProvider + AllergensProvider have already mounted and
@@ -458,7 +470,7 @@ function AppInner() {
   }
 
   return <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-10">
-    <h1 className="text-xl font-semibold mb-4">Larder — {tab === "audit" ? "Stats" : "Pantry"}</h1>
+    <LarderBrand pantry={pantry} nextDelivery={nextDelivery} />
     {tab === "audit"
       ? <AuditView
           pantry={pantry}
@@ -478,5 +490,6 @@ function AppInner() {
           syncErrors={syncErrors}
         />
     }
+    <LarderFooter />
   </div>;
 }
