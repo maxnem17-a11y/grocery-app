@@ -91,7 +91,7 @@ See `KNOWN_ISSUES.md`. The almond-milk → tree-nut classification gap is intent
 ## Current state
 
 **Last verified:** 2026-05-17
-**Last commit:** `HEAD` — Step 7d (App-scope pantry sync slice + PantryView; primitives.jsx co-extracted, closing 7a). See `git show HEAD` for the actual hash; next session should bump this line to that hash per the update protocol.
+**Last commit:** `0a41c61` — Step 7d (App-scope pantry sync slice + PantryView; primitives.jsx co-extracted, closing 7a).
 **App shell:** Post-7d, `src/App.jsx` is the real app shell — pantry sync slice ported and tested. No longer smoke-test framing.
 **Smoke test:** ✅ localhost:5173 renders PantryView against live Supabase; out-of-stock + freezer toggles server-confirmed via MCP (qty debounce deferred — see 7d-followup).
 
