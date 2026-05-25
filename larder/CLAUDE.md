@@ -41,11 +41,15 @@ grocery-app/                ← git root
         │   ├── pantry-math.js     ← pure pantry/confidence calculations
         │   ├── household-rules.js ← never_restock patterns
         │   ├── delivery.js        ← suggestNextDelivery(receipts) — receipt cadence → next predicted delivery
-        │   └── recipe-match.js    ← pantryMatchSet + makeability — recipe ingredient ↔ pantry resolution
+        │   ├── recipe-match.js    ← pantryMatchSet + makeability + leverageScore (added 7j-1)
+        │   ├── tesco-skus.js      ← buildSkuIndex / lookupSku / tescoSearchUrl / neverRestockReason (7j-1)
+        │   ├── pricing.js         ← PRODUCT_FAMILIES + normaliseProductName / findPantryMatch / buildPriceIndex / lookupPriceForIngredient / extractPackSize (7j-1)
+        │   └── gap-analysis.js    ← computeRegularsAndGaps — receipt-history regulars vs current pantry (7j-1)
         ├── contexts/
         │   ├── ReceiptsContext.jsx  ← receipts data + load state (consumed by AuditView + LarderBrand inputs)
         │   ├── AllergensContext.jsx ← allergens config + load state (consumed by AuditView + PlannerView)
-        │   └── RecipesContext.jsx   ← recipes state + updateRecipePage + version counter (7g/7h refactor; replaces deleted src/lib/recipes.js)
+        │   ├── RecipesContext.jsx   ← recipes state + updateRecipePage + version counter (7g/7h refactor; replaces deleted src/lib/recipes.js)
+        │   └── TescoSkusContext.jsx ← Tesco SKU index + load state (7j-1; consumed by SuggestedBasket)
         └── components/
             ├── primitives.jsx     ← InfoTip / SortHeader / Chip / AudienceTag / Bar / Stat / Section / EaterTile
             ├── PantryView.jsx     ← Pantry tab, verbatim port of canonical L1388–1617
@@ -53,6 +57,8 @@ grocery-app/                ← git root
             ├── PlannerView.jsx    ← Cook tab, verbatim port of canonical L2273–2340 (dead TescoSkus line stripped per 7g A1)
             ├── RecipesView.jsx    ← Recipes tab, verbatim port of canonical L1620–1825; recipes + updateRecipePage via useRecipes() hook
             ├── RecipeMicroList.jsx ← collapsible recipe card grid — used by PlannerView (EaterTile moved to primitives in 7i)
+            ├── SuggestedBasket.jsx ← basket recommendation engine; verbatim port of canonical L1849–2270 (7j-1)
+            ├── GapsView.jsx       ← Basket tab; minimal shell mounting SuggestedBasket (7j-1; regulars/gaps table lands in 7j-2)
             ├── LarderBrand.jsx    ← brand block: jar SVG/PNG + style toggle + delivery subtitle + favicon swap (post-7f-followup)
             ├── LarderFooter.jsx   ← "What's in your kitchen?" sign-off
             └── TabIcon.jsx        ← brand-style-aware tab icons (monoline modern + pixel-art retro); useBrandStyle co-located
@@ -104,7 +110,7 @@ See `KNOWN_ISSUES.md`. The almond-milk → tree-nut classification gap is intent
 ## Current state
 
 **Last verified:** 2026-05-25
-**Last commit:** `d34d700` — Step 7f-helpbanner (HelpBanner extraction + showHelpBanner state + ? Help pill wired).
+**Last commit:** `HEAD` — Step 7j-1 (TescoSkusContext + SKU/pricing/gap-analysis libs + leverageScore + SuggestedBasket + Basket-tab shell). See `git show HEAD` for the actual hash; next session should bump this line to that hash per the update protocol.
 **App shell:** `src/App.jsx` wraps the tree in `<ReceiptsProvider>` + `<AllergensProvider>` + `<RecipesProvider>` (recipes state + updateRecipePage owned by RecipesContext post-7g/7h), runs the pantry + cooked boot fetch, owns the pantry sync slice + cooked-log mutation slice (`addCooked` / `cookedSyncErrors`), holds App-scope `eaterFilter` state for RecipesView, mounts `<LarderBrand>` + a clickable tab strip with `<TabIcon>` glyphs + `<LarderFooter>` around the active view. Default tab is `"planner"` (canonical-faithful). Tab state is in-memory only.
 **Smoke test:** ⚠ Browser smoke-test skipped in 7i per user direction (workflow change: "no need to wait for OK if confident"); correctness verified via static analysis + build green at 49 modules. Static review confirmed hook ordering, useMemo deps, addCooked closure semantics, page-edit input wires updateRecipePage via useRecipes(), and TabIcon "recipes" kind already implemented in 7f-3.
 
@@ -117,7 +123,11 @@ See `KNOWN_ISSUES.md`. The almond-milk → tree-nut classification gap is intent
 - `src/lib/pantry-math.js` (~135 lines)
 - `src/lib/household-rules.js` (34 lines, never_restock patterns from RAW blob — step 7b)
 - `src/lib/delivery.js` (~65 lines, `suggestNextDelivery(receipts)` — step 7f-1)
-- `src/lib/recipe-match.js` (~65 lines, `pantryMatchSet` + `makeability` — step 7g)
+- `src/lib/recipe-match.js` (~130 lines, `pantryMatchSet` + `makeability` — step 7g; `leverageScore` appended 7j-1)
+- `src/lib/tesco-skus.js` (~130 lines, `buildSkuIndex` + `lookupSku` + `tescoSearchUrl` + `neverRestockReason` — step 7j-1)
+- `src/lib/pricing.js` (~330 lines incl. ~140-row PRODUCT_FAMILIES regex table, `normaliseProductName` + `findPantryMatch` + `buildPriceIndex` + `lookupPriceForIngredient` + `extractPackSize` — step 7j-1)
+- `src/lib/gap-analysis.js` (~75 lines, `computeRegularsAndGaps` — step 7j-1)
+- `src/contexts/TescoSkusContext.jsx` (~70 lines, TescoSkusProvider + useTescoSkus — step 7j-1; empty-index default matches canonical L820)
 - `src/contexts/ReceiptsContext.jsx` (~57 lines, ReceiptsProvider + useReceipts hook — step 7c, consumed by AuditView from 7e + by App for nextDelivery in 7f-1)
 - `src/contexts/AllergensContext.jsx` (~75 lines, AllergensProvider + useAllergens hook, EMPTY_ALLERGENS fallback — step 7e; consumed by AuditView + PlannerView)
 - `src/contexts/RecipesContext.jsx` (~135 lines, RecipesProvider + useRecipes hook + recipesRef sync mirror + updateRecipePage callback + version counter — step 7g/7h)
@@ -127,14 +137,16 @@ See `KNOWN_ISSUES.md`. The almond-milk → tree-nut classification gap is intent
 - `src/components/PlannerView.jsx` (~110 lines, verbatim port of canonical L2273–2340 with dead TescoSkusContext line stripped — step 7g, decision A1)
 - `src/components/RecipesView.jsx` (~210 lines, verbatim port of canonical L1620–1825 — step 7i; recipes + updateRecipePage via useRecipes(); page-edit input wires through context; addCooked + eaterFilter come from App props)
 - `src/components/RecipeMicroList.jsx` (~80 lines, verbatim port of canonical L2341–2402 — step 7g; EaterTile co-located in 7g, moved to primitives in 7i)
+- `src/components/SuggestedBasket.jsx` (~440 lines, verbatim port of canonical L1849–2270 — step 7j-1)
+- `src/components/GapsView.jsx` (~22 lines, minimal Basket-tab shell mounting SuggestedBasket — step 7j-1; regulars/gaps table lands in 7j-2)
 - `src/components/LarderBrand.jsx` (~155 lines, verbatim port of canonical L4824–4960 — step 7f-1; favicon DOM swap deferred per A2)
 - `src/components/LarderFooter.jsx` (~16 lines, verbatim port of canonical L4961–4970 — step 7f-1)
 - `src/components/TabIcon.jsx` (~360 lines, verbatim port of canonical L4977–5345 — step 7f-3; `useBrandStyle()` hook co-located; all 6 kinds × 2 styles; pure inline SVG, no image files)
 - `larder/public/icons/` — all 6 brand icons (modern + retro × 192 / 512 / apple-touch). Single retro-192 landed in 7f-1 (decision A2b) for LarderBrand's inline `<img>`; remaining 5 copied in 7f-followup alongside the favicon `<link>` swap.
-- `src/App.jsx` wires 3 Provider wrap + boot fetch (pantry + cooked) + pantry sync slice + cooked-log mutation slice (`addCooked` / `cookedSyncErrors` / `setCookedSyncError`) + `eaterFilter` state + brand chrome + tab strip with TabIcon glyphs (steps 7d / 7e / 7f-1 / 7f-2 / 7f-3 / 7g / 7i)
+- `src/App.jsx` wires 4 Provider wrap (Receipts / Allergens / Recipes / TescoSkus) + boot fetch (pantry + cooked) + pantry sync slice + cooked-log mutation slice (`addCooked` / `cookedSyncErrors` / `setCookedSyncError`) + `eaterFilter` state + `showHelpBanner` state + brand chrome + tab strip with TabIcon glyphs (steps 7d / 7e / 7f-1 / 7f-2 / 7f-3 / 7g / 7i / 7j-1)
 - Canonical `<style>` block inlined into `larder/index.html` for CSS parity (step 7d)
 - `KNOWN_ISSUES.md`
-- `npm run build` green (49 modules)
+- `npm run build` green (56 modules)
 
 #### Removed in 7g
 - `src/lib/recipes.js` — module-level `let RECIPES` + `getRecipes`/`setRecipes` shape replaced by `RecipesContext`. Was a placeholder in 7e flagged as refactor target 7h; 7g/7h merged into one atomic step.
@@ -213,6 +225,47 @@ Smoke tests:
 - **URL reader removed: PASSED.** `localhost:5173/?tab=audit` lands on Pantry (URL no longer steers state).
 - **Reload resets to Pantry: PASSED.** No URL sync, no in-memory persistence (B1).
 - **No regressions: PASSED.** Pantry toggles + Audit KPIs + LarderBrand style toggle + Footer all retain prior green status.
+
+#### 7j-1 — Basket tab: TescoSkusContext + SuggestedBasket + lib helpers (Completed 2026-05-25)
+
+Biggest single step so far. Lands the SuggestedBasket recommendation engine on a new "Basket" tab between Pantry and Stats. The full GapsView body (regulars/gaps table, LeverageTileGrid) deferred to 7j-2.
+
+New libs (decision B1 — separate concerns):
+- `src/lib/tesco-skus.js` (~130 lines): `buildSkuIndex` (L727), `lookupSku` (L758, three-tier matching), `tescoSearchUrl` (L810), `neverRestockReason` (L4051; depends on lookupSku + HOUSEHOLD_RULES). Pure functions.
+- `src/lib/pricing.js` (~330 lines incl. PRODUCT_FAMILIES): `normaliseProductName` + 140-row regex taxonomy (L3703–3914), `findPantryMatch` + PANTRY_KEYWORDS, `extractPackSize`, `buildPriceIndex`, `lookupPriceForIngredient`. Lower-median preserved verbatim (canonical L4108-4110); not "fixed" to true median.
+- `src/lib/gap-analysis.js` (~75 lines): `computeRegularsAndGaps` (L4194). The `latestIdx` return field preserved verbatim per the canonical TODO at L4190.
+- `src/lib/recipe-match.js`: `leverageScore` appended (canonical L1196).
+
+New context (decision E2 — empty default, no boot gate):
+- `src/contexts/TescoSkusContext.jsx`: TescoSkusProvider + useTescoSkus. Empty default `{ byKey: new Map(), byTescoName: new Map(), all: [] }` per canonical L820 — items render with `needs_sku_lookup: true` pre-boot rather than crashing. AppInner's loading gate does NOT block on this (canonical behaviour).
+
+New views:
+- `src/components/SuggestedBasket.jsx` (~440 lines, verbatim canonical L1849–2270): 4 context hooks (useReceipts / useAllergens / useTescoSkus / useRecipes), 5 useMemos (matchSet → decorated → leverage; priceIndex; gapAnalysis; nextDelivery; big `basket` useMemo combining all three input streams), 2 useStates (openedSkus, copyState), per-row "Open in Tesco" affordance, JSON download + clipboard export. RECIPES module global → `recipes` from useRecipes (matches 7g/7i pattern).
+- `src/components/GapsView.jsx` (~22 lines): minimal shell — just renders `<SuggestedBasket pantry outOfStock />`. Decision D1.
+
+App.jsx wiring:
+- Fourth Provider (`<TescoSkusProvider>`) wraps the tree inside `<RecipesProvider>`.
+- Tabs array gains `["gaps", "Basket", <canonical subtitle>]` between pantry and audit. Canonical L5559 order: planner / recipes / pantry / gaps / audit (tesco still pending — that's 7k).
+- `{tab === "gaps" && <GapsView .../>}` render branch.
+
+Scope decisions taken in review:
+- **A1**: two-step split (7j-1 / 7j-2) rather than atomic. 7j-1 is the headline feature; 7j-2 adds the regulars/gaps table polish.
+- **B1**: three separate lib files (tesco-skus / pricing / gap-analysis) for clean concerns.
+- **C** (verbatim): RECIPES → useRecipes().recipes; same shape as 7g/7i.
+- **D1**: GapsView is a minimal shell; no placeholder text for the deferred regulars table.
+- **E2**: TescoSkusContext empty-default unblocks consumers pre-boot; not added to AppInner's loading gate.
+
+Smoke tests: SKIPPED in browser per workflow. Static review confirmed:
+- Hook ordering in SuggestedBasket (14 hooks, all unconditional, consistent across renders).
+- `basket` useMemo deps `[gapAnalysis, leverage, pantry, outOfStock, priceIndex, nextDelivery, skuIndex]` cover all body reads.
+- `decorated` useMemo deps include `recipesVersion` for safety.
+- TescoSkusContext default uses Map objects (not plain `{}`); lookupSku has explicit `instanceof Map` backwards-compat branch.
+- `computeRegularsAndGaps` returns `null` for empty receipts; SuggestedBasket guards with `gapAnalysis?.gaps || []`.
+- All cross-file imports map to public exports.
+- TabIcon "gaps" kind already implemented in 7f-3 (modern basket + retro pixel-art basket).
+
+Known dead code preserved verbatim:
+- L61 `const expiring = pantry.filter(...)` at the top of SuggestedBasket — declared but never referenced in the function body. Canonical has the same dead reference; not "fixed."
 
 #### 7f-helpbanner — HelpBanner extraction (Completed 2026-05-25)
 
@@ -318,17 +371,13 @@ Smoke tests:
 
 Confirm that rapid clicks on the qty +/− buttons within a 150ms window produce a single coalesced PATCH (not one-per-click). Test approach: pin App in React DevTools, watch hooks 15 (`qtyDebounceTimers`) and 16 (`pendingQtyValues`); fire 5+ clicks programmatically via `$r` or a console snippet to guarantee sub-150ms cadence; expect one PATCH with cumulative value. Server-write correctness already proven in 7d. Pure optimisation verification.
 
-#### 7j — TescoSkusContext extraction (unblocks OrdersView + SuggestedBasket)
+#### 7j-2 — GapsView regulars/gaps table
 
-The last two unported tab views — **OrdersView** (canonical L3322) and **SuggestedBasket** (canonical L1849) — both consume `TescoSkusContext` for the basket-key → Tesco-SKU mapping. The context itself (canonical L820) plus `buildSkuIndex` (L727) + `lookupSku` (L758) all need extracting. `fetchTescoSkus` is already in `src/lib/supabase.js` from 7c-era work.
+Expand the Basket-tab shell with the rest of canonical L4242–4484: the regulars table (sortable columns: count / item / lastSeen / status), the leverage section (`<LeverageTileGrid>` from canonical L2403–2482, ~80 lines), and the filter controls (minOrders slider, status filter pills). All input data (`computeRegularsAndGaps`, `leverageScore`) already extracted in 7j-1 — this step is pure UI port. Estimated ~280 lines.
 
-OrdersView also renders `<ReceiptParser/>` inside its empty-state and after the KPI strip, which pulls in `ReceiptsRefreshContext` (deferred — canonical L546) plus the PDF/eml ingest flow. Decide at 7j scope time whether to: (a) co-extract ReceiptsRefreshContext + ReceiptParser as part of 7j; (b) stub ReceiptParser as a no-op for now and ship OrdersView functional minus the upload widget; (c) defer OrdersView until ReceiptParser is its own step.
+#### 7k — OrdersView + ReceiptParser
 
-SuggestedBasket has no ReceiptParser dependency — it just needs TescoSkusContext + the already-extracted helpers (`pantryMatchSet`, `makeability` in `recipe-match.js`; `buildPriceIndex` + `lookupPriceForIngredient` + `computeRegularsAndGaps` still in canonical, not yet extracted).
-
-Order suggestion: extract `TescoSkusContext` + the SKU index helpers first, port SuggestedBasket (smaller, no ReceiptParser entanglement), then OrdersView + ReceiptParser as 7k.
-
-Confirm scope before starting.
+The final canonical tab view. Has no TescoSkusContext blocker now (already extracted in 7j-1), but OrdersView renders `<ReceiptParser/>` inside its empty-state and after the KPI strip. ReceiptParser pulls in `ReceiptsRefreshContext` (canonical L546) plus the PDF/eml ingest flow (`parseTesco`, `loadPdfJs`, `detectRetailer`, ~600 lines). Decide at 7k scope time whether to: (a) co-extract ReceiptsRefreshContext + ReceiptParser as part of 7k; (b) stub ReceiptParser as a no-op for now and ship OrdersView functional minus the upload widget; (c) defer OrdersView until ReceiptParser is its own step.
 
 ### Deferred
 

@@ -14,6 +14,7 @@ import PantryView from "./components/PantryView.jsx";
 import AuditView from "./components/AuditView.jsx";
 import PlannerView from "./components/PlannerView.jsx";
 import RecipesView from "./components/RecipesView.jsx";
+import GapsView from "./components/GapsView.jsx";
 import LarderBrand from "./components/LarderBrand.jsx";
 import LarderFooter from "./components/LarderFooter.jsx";
 import TabIcon from "./components/TabIcon.jsx";
@@ -21,6 +22,7 @@ import { HelpBanner } from "./components/primitives.jsx";
 import { ReceiptsProvider, useReceipts } from "./contexts/ReceiptsContext.jsx";
 import { AllergensProvider } from "./contexts/AllergensContext.jsx";
 import { RecipesProvider, useRecipes } from "./contexts/RecipesContext.jsx";
+import { TescoSkusProvider } from "./contexts/TescoSkusContext.jsx";
 
 // ============================================================
 // App — top-level Provider wrap + tab shell
@@ -59,7 +61,9 @@ export default function App() {
     <ReceiptsProvider>
       <AllergensProvider>
         <RecipesProvider>
-          <AppInner />
+          <TescoSkusProvider>
+            <AppInner />
+          </TescoSkusProvider>
         </RecipesProvider>
       </AllergensProvider>
     </ReceiptsProvider>
@@ -121,6 +125,7 @@ function AppInner() {
     ["planner", "Cook", "What to cook this week, grouped by what's expiring, what's whole-household-safe, and what's high-protein."],
     ["recipes", "Recipes", "Search and filter every recipe in your library. Sort by makeability, protein, or prep time."],
     ["pantry", "Pantry", "Everything currently in the kitchen, with expiry and confidence tracking. Mark items out of stock if you've used them up."],
+    ["gaps", "Basket", "Your next shop — likely gaps plus the leverage picks that unlock the most recipes. Items you buy regularly that are missing from both your latest order and the pantry are candidates for the basket."],
     ["audit", "Stats", ""],
   ];
   const currentTabMeta = tabs.find(t => t[0] === tab);
@@ -599,6 +604,10 @@ function AppInner() {
       qtyAdjustments={qtyAdjustments}
       adjustQty={adjustQty}
       syncErrors={syncErrors}
+    />}
+    {tab === "gaps" && <GapsView
+      pantry={pantry}
+      outOfStock={outOfStock}
     />}
     {tab === "audit" && <AuditView
       pantry={pantry}

@@ -20,9 +20,8 @@
 // fallback to `item`) and its parenthetical-stripped form, so
 // "tomatoes (vine)" matches a pantry entry for "tomatoes".
 //
-// `leverageScore` (canonical L1196+) is NOT extracted yet — only
-// SuggestedBasket uses it, and that view is deferred behind
-// TescoSkusContext. Add when SuggestedBasket lands.
+// `leverageScore` (canonical L1196) appended in step 7j-1 alongside
+// the SuggestedBasket port (its first and currently only consumer).
 // ============================================================
 
 import { lc } from "./text.js";
@@ -60,4 +59,68 @@ export function makeability(recipe, matchSet) {
     else missing.push(i);
   }
   return { pct: Math.round(100 * have.length / ings.length), have, missing };
+}
+
+// leverageScore — verbatim port of canonical L1196–1246. Appended in
+// step 7j-1 alongside SuggestedBasket extraction.
+//
+// For each missing ingredient across all not-yet-makeable recipes
+// (baseline pct < 70), list every recipe it appears in and the
+// makeability boost it would give each one. Ranked by recipe_count
+// (broadest impact) then average boost. Returns the top `limit`
+// rows (or all if limit is falsy).
+//
+// Returned per-ingredient row:
+//   {
+//     ingredient, key, recipeCount, unlockedTo70, avgBoost,
+//     unlockedRecipes: [{name, before, after, id}],
+//     unlocks, mentions  (back-compat aliases for the planner caller)
+//   }
+export function leverageScore(recipes, matchSet, limit) {
+  const baseline = recipes.map(r => makeability(r, matchSet).pct);
+  const ingMap = new Map(); // key -> { label, recipes: [{name, before, after, id}] }
+  recipes.forEach((r, idx) => {
+    if (baseline[idx] >= 70) return; // recipe already makeable; skip
+    const m = makeability(r, matchSet);
+    // Unique missing keys for this recipe
+    const missingKeys = new Set();
+    for (const i of m.missing) {
+      const mm = (i.pantry_match || i.item || "").toLowerCase().trim();
+      const cm = mm.replace(/\s*\(.*?\)\s*/g, "").trim();
+      if (!cm) continue;
+      if (missingKeys.has(cm)) continue;
+      missingKeys.add(cm);
+      const label = i.pantry_match || i.item;
+      // Compute the after-% if we had this ingredient
+      const augmented = new Set(matchSet); augmented.add(cm);
+      const after = makeability(r, augmented).pct;
+      if (!ingMap.has(cm)) ingMap.set(cm, { label, recipes: [] });
+      ingMap.get(cm).recipes.push({
+        name: r.name,
+        before: baseline[idx],
+        after,
+        id: r.id,
+      });
+    }
+  });
+  const out = [];
+  for (const [key, v] of ingMap.entries()) {
+    const recipeCount = v.recipes.length;
+    const unlockedTo70 = v.recipes.filter(r => r.after >= 70).length;
+    const avgBoost = Math.round(v.recipes.reduce((s, r) => s + (r.after - r.before), 0) / recipeCount);
+    const sortedRecipes = v.recipes.slice().sort((a, b) => b.after - a.after);
+    out.push({
+      ingredient: v.label,
+      key,
+      recipeCount,
+      unlockedTo70,
+      avgBoost,
+      unlockedRecipes: sortedRecipes,
+      // Back-compat fields for the planner caller
+      unlocks: unlockedTo70,
+      mentions: recipeCount,
+    });
+  }
+  out.sort((a, b) => b.recipeCount - a.recipeCount || b.avgBoost - a.avgBoost);
+  return limit ? out.slice(0, limit) : out;
 }
