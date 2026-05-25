@@ -48,11 +48,12 @@ grocery-app/                ← git root
         │   ├── AllergensContext.jsx ← allergens config + load state (consumed by AuditView + PlannerView)
         │   └── RecipesContext.jsx   ← recipes state + updateRecipePage + version counter (7g/7h refactor; replaces deleted src/lib/recipes.js)
         └── components/
-            ├── primitives.jsx     ← InfoTip / SortHeader / Chip / AudienceTag / Bar / Stat / Section
+            ├── primitives.jsx     ← InfoTip / SortHeader / Chip / AudienceTag / Bar / Stat / Section / EaterTile
             ├── PantryView.jsx     ← Pantry tab, verbatim port of canonical L1388–1617
             ├── AuditView.jsx      ← Stats tab, verbatim port of canonical L4485–4809 (incl. co-located GapCard); recipes via useRecipes() hook post-7g
             ├── PlannerView.jsx    ← Cook tab, verbatim port of canonical L2273–2340 (dead TescoSkus line stripped per 7g A1)
-            ├── RecipeMicroList.jsx ← collapsible recipe card grid (incl. co-located EaterTile) — used by PlannerView
+            ├── RecipesView.jsx    ← Recipes tab, verbatim port of canonical L1620–1825; recipes + updateRecipePage via useRecipes() hook
+            ├── RecipeMicroList.jsx ← collapsible recipe card grid — used by PlannerView (EaterTile moved to primitives in 7i)
             ├── LarderBrand.jsx    ← brand block: jar SVG/PNG + style toggle + delivery subtitle (favicon swap deferred — A2)
             ├── LarderFooter.jsx   ← "What's in your kitchen?" sign-off
             └── TabIcon.jsx        ← brand-style-aware tab icons (monoline modern + pixel-art retro); useBrandStyle co-located
@@ -104,9 +105,9 @@ See `KNOWN_ISSUES.md`. The almond-milk → tree-nut classification gap is intent
 ## Current state
 
 **Last verified:** 2026-05-25
-**Last commit:** `094b579` — Step 7g + 7h (PlannerView port + RecipesContext refactor; src/lib/recipes.js deleted; default tab → "planner").
-**App shell:** `src/App.jsx` wraps the tree in `<ReceiptsProvider>` + `<AllergensProvider>` + `<RecipesProvider>` (recipes state + updateRecipePage now own their own context post-7g/7h), runs the pantry + cooked boot fetch, owns the pantry sync slice, mounts `<LarderBrand>` + a clickable tab strip with `<TabIcon>` glyphs + `<LarderFooter>` around the active view. Default tab is `"planner"` (canonical-faithful, decision D2). Tab state is in-memory only (no URL sync).
-**Smoke test:** ⚠ Browser smoke-test skipped in 7g per user direction (time pressure); correctness verified via static analysis + build green at 48 modules. Two latent bugs caught during static review and fixed pre-commit: (1) `updateRecipePage` race condition where `setState(updater)` snapshot pattern would not run synchronously in React 18 — replaced with a `recipesRef` mirror + sync effect; (2) AuditView `useMemo` deps were missing `recipes` after the `getRecipes()` → hook swap — added.
+**Last commit:** `HEAD` — Step 7i (RecipesView port + addCooked + eaterFilter; EaterTile promoted to primitive). See `git show HEAD` for the actual hash; next session should bump this line to that hash per the update protocol.
+**App shell:** `src/App.jsx` wraps the tree in `<ReceiptsProvider>` + `<AllergensProvider>` + `<RecipesProvider>` (recipes state + updateRecipePage owned by RecipesContext post-7g/7h), runs the pantry + cooked boot fetch, owns the pantry sync slice + cooked-log mutation slice (`addCooked` / `cookedSyncErrors`), holds App-scope `eaterFilter` state for RecipesView, mounts `<LarderBrand>` + a clickable tab strip with `<TabIcon>` glyphs + `<LarderFooter>` around the active view. Default tab is `"planner"` (canonical-faithful). Tab state is in-memory only.
+**Smoke test:** ⚠ Browser smoke-test skipped in 7i per user direction (workflow change: "no need to wait for OK if confident"); correctness verified via static analysis + build green at 49 modules. Static review confirmed hook ordering, useMemo deps, addCooked closure semantics, page-edit input wires updateRecipePage via useRecipes(), and TabIcon "recipes" kind already implemented in 7f-3.
 
 ### Completed
 - Vite scaffold (package.json, vite.config.js, index.html, main.jsx, App.jsx)
@@ -121,19 +122,20 @@ See `KNOWN_ISSUES.md`. The almond-milk → tree-nut classification gap is intent
 - `src/contexts/ReceiptsContext.jsx` (~57 lines, ReceiptsProvider + useReceipts hook — step 7c, consumed by AuditView from 7e + by App for nextDelivery in 7f-1)
 - `src/contexts/AllergensContext.jsx` (~75 lines, AllergensProvider + useAllergens hook, EMPTY_ALLERGENS fallback — step 7e; consumed by AuditView + PlannerView)
 - `src/contexts/RecipesContext.jsx` (~135 lines, RecipesProvider + useRecipes hook + recipesRef sync mirror + updateRecipePage callback + version counter — step 7g/7h)
-- `src/components/primitives.jsx` (~140 lines, InfoTip / SortHeader / Chip / Bar / Stat — step 7a/7d; Section appended in 7e; AudienceTag appended in 7g)
+- `src/components/primitives.jsx` (~155 lines, InfoTip / SortHeader / Chip / Bar / Stat — step 7a/7d; Section appended in 7e; AudienceTag appended in 7g; EaterTile promoted from RecipeMicroList in 7i)
 - `src/components/PantryView.jsx` (~232 lines, verbatim port of canonical L1388–1617 — step 7d)
 - `src/components/AuditView.jsx` (~330 lines, verbatim port of canonical L4485–4809 incl. co-located GapCard — step 7e; recipes via useRecipes() post-7g; prop signature reduced to `{pantry, cooked, outOfStock}`)
 - `src/components/PlannerView.jsx` (~110 lines, verbatim port of canonical L2273–2340 with dead TescoSkusContext line stripped — step 7g, decision A1)
-- `src/components/RecipeMicroList.jsx` (~95 lines, verbatim port of canonical L2341–2402 + co-located EaterTile L1827–1838 — step 7g)
+- `src/components/RecipesView.jsx` (~210 lines, verbatim port of canonical L1620–1825 — step 7i; recipes + updateRecipePage via useRecipes(); page-edit input wires through context; addCooked + eaterFilter come from App props)
+- `src/components/RecipeMicroList.jsx` (~80 lines, verbatim port of canonical L2341–2402 — step 7g; EaterTile co-located in 7g, moved to primitives in 7i)
 - `src/components/LarderBrand.jsx` (~155 lines, verbatim port of canonical L4824–4960 — step 7f-1; favicon DOM swap deferred per A2)
 - `src/components/LarderFooter.jsx` (~16 lines, verbatim port of canonical L4961–4970 — step 7f-1)
 - `src/components/TabIcon.jsx` (~360 lines, verbatim port of canonical L4977–5345 — step 7f-3; `useBrandStyle()` hook co-located; all 6 kinds × 2 styles; pure inline SVG, no image files)
 - `larder/public/icons/larder-retro-192.png` (single icon for LarderBrand's retro-jar inline `<img>` — step 7f-1, decision A2b; other icons + favicon `<link>`s still deferred)
-- `src/App.jsx` wires 3 Provider wrap + boot fetch (pantry + cooked) + pantry sync slice + brand chrome + tab strip with TabIcon glyphs (steps 7d / 7e / 7f-1 / 7f-2 / 7f-3 / 7g)
+- `src/App.jsx` wires 3 Provider wrap + boot fetch (pantry + cooked) + pantry sync slice + cooked-log mutation slice (`addCooked` / `cookedSyncErrors` / `setCookedSyncError`) + `eaterFilter` state + brand chrome + tab strip with TabIcon glyphs (steps 7d / 7e / 7f-1 / 7f-2 / 7f-3 / 7g / 7i)
 - Canonical `<style>` block inlined into `larder/index.html` for CSS parity (step 7d)
 - `KNOWN_ISSUES.md`
-- `npm run build` green (48 modules)
+- `npm run build` green (49 modules)
 
 #### Removed in 7g
 - `src/lib/recipes.js` — module-level `let RECIPES` + `getRecipes`/`setRecipes` shape replaced by `RecipesContext`. Was a placeholder in 7e flagged as refactor target 7h; 7g/7h merged into one atomic step.
@@ -213,6 +215,35 @@ Smoke tests:
 - **Reload resets to Pantry: PASSED.** No URL sync, no in-memory persistence (B1).
 - **No regressions: PASSED.** Pantry toggles + Audit KPIs + LarderBrand style toggle + Footer all retain prior green status.
 
+#### 7i — RecipesView port + cooked-log mutation slice (Completed 2026-05-25)
+
+Third view port. RecipesView is the second consumer of cooked-log state (PlannerView + AuditView were readers; RecipesView is the first writer via `addCooked`).
+
+New file:
+- `src/components/RecipesView.jsx` — verbatim port of canonical L1620–1825. Structural changes per migration discipline: `useContext(AllergensContext)` → `useAllergens()`; `RECIPES` module global → `recipes` from `useRecipes()`; `updateRecipePage` + `recipesVersion` from `useRecipes()` instead of props (matches the 7g/7h refactor pattern AuditView already follows). Prop signature reduced from canonical's 9 props to 7: `{pantry, outOfStock, cooked, addCooked, eaterFilter, setEaterFilter, cookedSyncErrors}`.
+
+Promotion:
+- `EaterTile` (canonical L1827–1838) was co-located inside `RecipeMicroList.jsx` in 7g (single consumer). With RecipesView as the second consumer, promoted to `primitives.jsx` and imported by both. Decision A1.
+
+App.jsx additions:
+- `eaterFilter` + `setEaterFilter` `useState` (default `"all"`). App-scope so it persists across tab switches — matches canonical L5550. Decision C1.
+- `cookedSyncErrors` state map (`{recipeId: errorMessage}`) + `setCookedSyncError` useCallback helper. Mirrors pantry's syncErrors pattern.
+- `addCooked` useCallback — verbatim port of canonical L5584–5661. Optimistic local insert/remove → background `insertCookedLog` / `deleteCookedLog` → rollback on failure with sync-error surfacing. Deps `[cooked, setCookedSyncError]` keep the `cooked.findIndex(...)` closure fresh on every cooked update. Decision B1 (no CookedContext refactor yet — RecipesView is the first writer, mirroring 7h's "defer until second consumer needs the same plumbing" discipline).
+- Tabs array expanded to `[planner, recipes, pantry, audit]` in canonical L5555–5562 order. TabIcon "recipes" kind already implemented in 7f-3.
+- Imports: `RecipesView` from components; `insertCookedLog` + `deleteCookedLog` from supabase.
+
+Smoke tests: SKIPPED in browser per user workflow change ("no need to wait for OK if confident"). Static review confirmed:
+- Hook ordering in RecipesView (all hooks before any conditional).
+- `decorated` useMemo deps `[recipes, matchSet, allergens, recipesVersion]` cover all reads.
+- `cookedSet` useMemo deps `[cooked]` cover all reads.
+- `addCooked` deps `[cooked, setCookedSyncError]` give fresh closure for the `cooked.findIndex` call at click time.
+- Page-edit input wires `updateRecipePage` from `useRecipes()` — the 7g/7h race-fix in RecipesContext applies.
+- TabIcon "recipes" kind renders in both modern + retro styles (7f-3 verbatim).
+- `cookedSyncErrors` access null-safe via `(cookedSyncErrors||{})[r.id]`.
+- AuditView prop signature unchanged.
+
+Known issue inherited from canonical (verbatim): double-click on "Mark cooked" within the optimistic window (before the first POST completes) can leave server state diverged from local state — second click sees the local optimistic entry (no server id yet), takes the REMOVE path, hits the "no server id, skip DELETE" branch, but the first POST may still succeed server-side. Not fixed here (verbatim port); document if it surfaces.
+
 #### 7g + 7h — PlannerView port + RecipesContext refactor (Completed 2026-05-25)
 
 Atomic step: PlannerView is the second consumer of recipes data; per the 7h plan ("migrate the new consumer in the same step so the refactor lands cleanly"), 7g absorbed 7h.
@@ -274,11 +305,15 @@ Add the three `<link>` elements (`#favicon-touch` / `-192` / `-512`) to `larder/
 
 Extract `HelpBanner` from canonical L1297–1318 into `primitives.jsx`; add `showHelpBanner` state + dismiss callback (canonical L5440) + `help-dismissed` localStorage key (`LS_KEY + ':help-dismissed'`) to `App.jsx`; pass `setShowHelpBanner` to `<LarderBrand>` so the `? Help` button surfaces. Independent of tab chrome — can land anytime.
 
-#### 7i — third view port (open: RecipesView next, then SuggestedBasket/OrdersView behind TescoSkusContext)
+#### 7j — TescoSkusContext extraction (unblocks OrdersView + SuggestedBasket)
 
-The remaining canonical views that don't require deferred infrastructure:
-- **RecipesView** (canonical L1620–1826): consumes `AllergensContext` only (already wired); pulls in many recipe-decoration helpers (`pantryMatchSet` + `makeability` are extracted post-7g; rest TBD).
-- **OrdersView** / **SuggestedBasket**: both need TescoSkusContext (still deferred). Wait until that block is resolved.
+The last two unported tab views — **OrdersView** (canonical L3322) and **SuggestedBasket** (canonical L1849) — both consume `TescoSkusContext` for the basket-key → Tesco-SKU mapping. The context itself (canonical L820) plus `buildSkuIndex` (L727) + `lookupSku` (L758) all need extracting. `fetchTescoSkus` is already in `src/lib/supabase.js` from 7c-era work.
+
+OrdersView also renders `<ReceiptParser/>` inside its empty-state and after the KPI strip, which pulls in `ReceiptsRefreshContext` (deferred — canonical L546) plus the PDF/eml ingest flow. Decide at 7j scope time whether to: (a) co-extract ReceiptsRefreshContext + ReceiptParser as part of 7j; (b) stub ReceiptParser as a no-op for now and ship OrdersView functional minus the upload widget; (c) defer OrdersView until ReceiptParser is its own step.
+
+SuggestedBasket has no ReceiptParser dependency — it just needs TescoSkusContext + the already-extracted helpers (`pantryMatchSet`, `makeability` in `recipe-match.js`; `buildPriceIndex` + `lookupPriceForIngredient` + `computeRegularsAndGaps` still in canonical, not yet extracted).
+
+Order suggestion: extract `TescoSkusContext` + the SKU index helpers first, port SuggestedBasket (smaller, no ReceiptParser entanglement), then OrdersView + ReceiptParser as 7k.
 
 Confirm scope before starting.
 

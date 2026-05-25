@@ -15,6 +15,9 @@
 //   - Bar           L1335–1338   (step 7d)
 //   - Stat          L1339–1361   (step 7d; uses <InfoTip> internally)
 //   - Section       L1362–1385   (step 7e; uses <InfoTip> internally)
+//   - EaterTile     L1827–1838   (moved here in step 7i from
+//                                 RecipeMicroList.jsx — second
+//                                 consumer landed: RecipesView)
 //
 // Deliberately omitted from this file:
 //   - HelpBanner (L1297–1318)    — see 7f-helpbanner in Next
@@ -142,5 +145,22 @@ export function Stat({ label, value, tone, sub, tip, tipAlign, onClick, expanded
     </div>
     <div className={`text-2xl font-semibold mt-0.5 ${tmap[tone] || ""}`}>{value}</div>
     {sub && <div className="text-xs text-stone-500 mt-0.5">{sub}</div>}
+  </div>;
+}
+
+// EaterTile — single-eater status chip + optional reason list.
+// Verbatim port of canonical L1827–1838. Originally co-located in
+// RecipeMicroList.jsx (step 7g); promoted to a primitive in step
+// 7i when RecipesView became the second consumer.
+export function EaterTile({ name, status, reasons, uncertain }) {
+  const map = { safe: ["ok", "✓ Can eat"], blocked: ["danger", "✗ Blocked"], check: ["warn", "⚠️ Check"] };
+  const [tone, label] = map[status] || map.safe;
+  return <div className="bg-stone-50 rounded-lg p-2.5 text-xs">
+    <div className="flex items-center justify-between mb-1">
+      <span className="font-medium">{name}</span>
+      <Chip tone={tone}>{label}</Chip>
+    </div>
+    {reasons && reasons.length > 0 && <div className="text-stone-600 text-[11px]">Blocked by: {reasons.slice(0, 3).join(", ")}{reasons.length > 3 ? "…" : ""}</div>}
+    {uncertain && uncertain.length > 0 && <div className="text-amber-700 text-[11px] mt-0.5">Check: {uncertain.join(", ")}</div>}
   </div>;
 }

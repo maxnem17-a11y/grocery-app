@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   SUPABASE,
+  deleteCookedLog,
   fetchCookedLog,
   fetchPantry,
+  insertCookedLog,
   mapCookedRow,
   mapPantryRow,
   patchPantryRow,
@@ -11,6 +13,7 @@ import { suggestNextDelivery } from "./lib/delivery.js";
 import PantryView from "./components/PantryView.jsx";
 import AuditView from "./components/AuditView.jsx";
 import PlannerView from "./components/PlannerView.jsx";
+import RecipesView from "./components/RecipesView.jsx";
 import LarderBrand from "./components/LarderBrand.jsx";
 import LarderFooter from "./components/LarderFooter.jsx";
 import TabIcon from "./components/TabIcon.jsx";
@@ -79,12 +82,20 @@ function AppInner() {
   // failed PATCHes so the user can retry; keyed by item name.
   const [syncErrors, setSyncErrors] = useState({});
 
-  // ===== Cooked log state (7e) =====
+  // ===== Cooked log state (7e + 7i) =====
   // Recipes moved into RecipesContext in 7g/7h — this file no longer
   // owns recipes / recipesLoaded / recipesVersion / updateRecipePage.
-  // Cooked stays here for now; it's only consumed by PlannerView's
-  // "Cooked log" Section and AuditView's counter strip.
+  // Cooked stays here: PlannerView's "Cooked log" Section + AuditView's
+  // counter strip read it as a prop, and RecipesView writes to it via
+  // addCooked (step 7i). When/if a second writer appears, this can
+  // refactor into a CookedContext mirroring RecipesContext.
   const [cooked, setCooked] = useState([]);
+  // Per-recipe sync-error map for cooked-log writes (step 7i). Mirrors
+  // pantry's syncErrors shape: { [recipeId]: errorMessage }.
+  const [cookedSyncErrors, setCookedSyncErrors] = useState({});
+  // Eater-filter state for RecipesView (step 7i). App-scope so it
+  // persists across tab switches — matches canonical L5550.
+  const [eaterFilter, setEaterFilter] = useState("all");
 
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
@@ -96,6 +107,7 @@ function AppInner() {
   const [tab, setTab] = useState("planner");
   const tabs = [
     ["planner", "Cook", "What to cook this week, grouped by what's expiring, what's whole-household-safe, and what's high-protein."],
+    ["recipes", "Recipes", "Search and filter every recipe in your library. Sort by makeability, protein, or prep time."],
     ["pantry", "Pantry", "Everything currently in the kitchen, with expiry and confidence tracking. Mark items out of stock if you've used them up."],
     ["audit", "Stats", ""],
   ];
@@ -337,6 +349,107 @@ function AppInner() {
     }, 150);
   }, [qtyAdjustments, findRowByItem, setItemSyncError]);
 
+  // ===== Cooked-log mutation slice (step 7i) =====
+  // Verbatim port of canonical L5567 (setCookedSyncError) + L5584
+  // (addCooked). Mirrors the pantry sync slice's optimistic-write +
+  // rollback + per-row sync-error pattern, but for cooked_log
+  // insert/delete instead of pantry_items PATCH.
+  const setCookedSyncError = useCallback((mealId, message) => {
+    setCookedSyncErrors(prev => {
+      const next = {...prev};
+      if (message) next[mealId] = message; else delete next[mealId];
+      return next;
+    });
+  }, []);
+
+  // Optimistic toggle of "cooked" status. Mirrors patchPantryRow's pattern:
+  // update local state immediately, fire insert/delete in the background,
+  // roll back on failure and surface an error via cookedSyncErrors.
+  //
+  // Adds: POST to cooked_log; on success, attach the server-assigned id to
+  //   the local entry (used for later deletes).
+  // Removes: DELETE by id; if the local entry has no id (legacy localStorage
+  //   state from before this sync existed), fall back to local-only removal
+  //   with a console warning.
+  const addCooked = useCallback((r) => {
+    const today = new Date().toISOString().slice(0,10);
+    const existingIdx = cooked.findIndex(c => c.meal_id === r.id);
+    const isRemove = existingIdx >= 0;
+    setCookedSyncError(r.id, null);
+
+    if (isRemove) {
+      // ----- REMOVE path -----
+      const removed = cooked[existingIdx];
+      // 1. Optimistic local removal
+      setCooked(prev => {
+        const copy = prev.slice();
+        const i = copy.findIndex(c => c.meal_id === r.id);
+        if (i >= 0) copy.splice(i, 1);
+        return copy;
+      });
+      // 2. If we don't have a server id, this was a legacy local-only entry
+      // — nothing to delete server-side.
+      if (!removed.id) {
+        console.warn(`addCooked: removing "${r.name}" but local entry has no server id — skipping DELETE`);
+        return;
+      }
+      // 3. Fire DELETE in background
+      deleteCookedLog(removed.id)
+        .catch(err => {
+          console.error(`Failed to delete cooked_log for "${r.name}":`, err);
+          // Roll back: re-insert at the same position.
+          setCooked(prev => {
+            const copy = prev.slice();
+            copy.splice(existingIdx, 0, removed);
+            return copy;
+          });
+          setCookedSyncError(r.id, "Couldn't save — tap again to retry");
+        });
+    } else {
+      // ----- ADD path -----
+      const localEntry = {
+        date: today,
+        meal_id: r.id,
+        source: r._source_file,
+        name: r.name,
+        audience: r._audience,
+        protein_per_serving_g: r.protein_per_serving_g,
+      };
+      // 1. Optimistic local insert (no id yet — added when POST succeeds)
+      setCooked(prev => [...prev, localEntry]);
+      // 2. Map local shape → DB columns and POST
+      const payload = {
+        recipe_id: r.id,
+        cooked_date: today,
+        recipe_name: r.name,
+        source_file: r._source_file,
+        audience: r._audience,
+        protein_per_serving_g: r.protein_per_serving_g,
+      };
+      insertCookedLog(payload)
+        .then(rows => {
+          // Attach server-assigned id to the local entry so a later un-mark
+          // can DELETE it by id rather than guessing.
+          const serverId = rows && rows[0] && rows[0].id;
+          if (serverId) {
+            setCooked(prev => prev.map(c =>
+              (c.meal_id === r.id && c.date === today && !c.id)
+                ? {...c, id: serverId}
+                : c
+            ));
+          }
+        })
+        .catch(err => {
+          console.error(`Failed to insert cooked_log for "${r.name}":`, err);
+          // Roll back the local insert.
+          setCooked(prev => prev.filter(c =>
+            !(c.meal_id === r.id && c.date === today && !c.id)
+          ));
+          setCookedSyncError(r.id, "Couldn't save — tap again to retry");
+        });
+    }
+  }, [cooked, setCookedSyncError]);
+
   // Flush any pending debounced qty PATCHes synchronously on page hide. The
   // 150ms debounce in adjustQty coalesces rapid +/- taps into one network
   // call, but if the user refreshes / backgrounds the app inside that 150ms
@@ -449,6 +562,15 @@ function AppInner() {
       pantry={pantry}
       outOfStock={outOfStock}
       cooked={cooked}
+    />}
+    {tab === "recipes" && <RecipesView
+      pantry={pantry}
+      outOfStock={outOfStock}
+      cooked={cooked}
+      addCooked={addCooked}
+      eaterFilter={eaterFilter}
+      setEaterFilter={setEaterFilter}
+      cookedSyncErrors={cookedSyncErrors}
     />}
     {tab === "pantry" && <PantryView
       pantry={pantry}

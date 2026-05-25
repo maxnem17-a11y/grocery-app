@@ -1,9 +1,10 @@
 // ============================================================
 // RecipeMicroList — collapsible grid of recipe cards
 // ============================================================
-// Verbatim port of canonical index.html L2341–2399 (RecipeMicroList)
-// + L1827–1838 (EaterTile, co-located here because it's only used
-// by RecipeMicroList's expanded view).
+// Verbatim port of canonical index.html L2341–2399.
+// EaterTile (canonical L1827–1838) was originally co-located here
+// in step 7g; promoted to a primitive in step 7i when RecipesView
+// became the second consumer.
 //
 // Each item is a decorated recipe (`r._make`, `r._flags`,
 // `r._audience` — see PlannerView's decorated useMemo). Clicking
@@ -17,7 +18,7 @@
 // ============================================================
 
 import { useState } from "react";
-import { AudienceTag, Chip } from "./primitives.jsx";
+import { AudienceTag, Chip, EaterTile } from "./primitives.jsx";
 
 export default function RecipeMicroList({ items }) {
   const [expanded, setExpanded] = useState(null);
@@ -76,21 +77,5 @@ export default function RecipeMicroList({ items }) {
       </div>;
     })}
     {!items.length && <div className="text-sm text-stone-500 col-span-full">Nothing matching right now.</div>}
-  </div>;
-}
-
-// EaterTile — single-eater chip + reason list. Used only by
-// RecipeMicroList's expanded card; co-located here.
-// Verbatim port of canonical L1827–1838.
-function EaterTile({ name, status, reasons, uncertain }) {
-  const map = { safe: ["ok", "✓ Can eat"], blocked: ["danger", "✗ Blocked"], check: ["warn", "⚠️ Check"] };
-  const [tone, label] = map[status] || map.safe;
-  return <div className="bg-stone-50 rounded-lg p-2.5 text-xs">
-    <div className="flex items-center justify-between mb-1">
-      <span className="font-medium">{name}</span>
-      <Chip tone={tone}>{label}</Chip>
-    </div>
-    {reasons && reasons.length > 0 && <div className="text-stone-600 text-[11px]">Blocked by: {reasons.slice(0, 3).join(", ")}{reasons.length > 3 ? "…" : ""}</div>}
-    {uncertain && uncertain.length > 0 && <div className="text-amber-700 text-[11px] mt-0.5">Check: {uncertain.join(", ")}</div>}
   </div>;
 }
