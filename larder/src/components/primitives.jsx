@@ -2,23 +2,24 @@
 // Primitives — small presentational components
 // ============================================================
 // Verbatim extractions from canonical index.html. Co-extracted
-// in step 7d (InfoTip / SortHeader / Chip / Bar / Stat) and
-// step 7e (Section, alongside AuditView), per CLAUDE.md
-// migration principle #5 (don't pre-extract).
+// in step 7d (InfoTip / SortHeader / Chip / Bar / Stat),
+// step 7e (Section, alongside AuditView), and step 7g
+// (AudienceTag, alongside PlannerView / RecipeMicroList), per
+// CLAUDE.md migration principle #5 (don't pre-extract).
 //
 // Contents (in canonical-file order):
 //   - InfoTip       L1249–1265   (step 7d)
 //   - SortHeader    L1272–1295   (step 7d)
 //   - Chip          L1319–1329   (step 7d)
+//   - AudienceTag   L1330–1334   (step 7g; uses <Chip> internally)
 //   - Bar           L1335–1338   (step 7d)
 //   - Stat          L1339–1361   (step 7d; uses <InfoTip> internally)
 //   - Section       L1362–1385   (step 7e; uses <InfoTip> internally)
 //
 // Deliberately omitted from this file:
-//   - HelpBanner (L1297–1318)    — not used by PantryView or AuditView
-//   - AudienceTag (L1330–1334)   — not used by PantryView or AuditView
-// These can be appended here when a later view extraction
-// needs them; same file, no parallel primitives module.
+//   - HelpBanner (L1297–1318)    — see 7f-helpbanner in Next
+// Append here when a later view extraction needs them; same
+// file, no parallel primitives module.
 // ============================================================
 
 import { useState } from "react";
@@ -82,6 +83,12 @@ export function Chip({ tone = "neutral", children, title }) {
     accent: "bg-violet-50 text-violet-700 border-violet-200",
   };
   return <span className={`chip ${map[tone] || map.neutral}`} title={title}>{children}</span>;
+}
+
+export function AudienceTag({ a }) {
+  if (a === "whole-household") return <Chip tone="ok">✅ Whole household</Chip>;
+  if (a === "check") return <Chip tone="warn">⚠️ Check</Chip>;
+  return <Chip tone="info">👨‍👩 Adults only</Chip>;
 }
 
 export function Bar({ pct, color }) {

@@ -3,55 +3,60 @@ import {
   SUPABASE,
   fetchCookedLog,
   fetchPantry,
-  fetchRecipes,
   mapCookedRow,
   mapPantryRow,
-  mapRecipeRow,
   patchPantryRow,
-  patchRecipeRow,
 } from "./lib/supabase.js";
-import { getRecipes, setRecipes } from "./lib/recipes.js";
 import { suggestNextDelivery } from "./lib/delivery.js";
 import PantryView from "./components/PantryView.jsx";
 import AuditView from "./components/AuditView.jsx";
+import PlannerView from "./components/PlannerView.jsx";
 import LarderBrand from "./components/LarderBrand.jsx";
 import LarderFooter from "./components/LarderFooter.jsx";
 import TabIcon from "./components/TabIcon.jsx";
 import { ReceiptsProvider, useReceipts } from "./contexts/ReceiptsContext.jsx";
 import { AllergensProvider } from "./contexts/AllergensContext.jsx";
+import { RecipesProvider, useRecipes } from "./contexts/RecipesContext.jsx";
 
 // ============================================================
 // App — top-level Provider wrap + tab shell
 // ============================================================
-// 7e expanded the Vite scaffold from "Pantry only" to "Pantry +
-// Audit", which required:
-//   - wiring <ReceiptsProvider> + <AllergensProvider> around the
-//     render tree (each Provider owns its own boot fetch, mirroring
-//     the 7c ReceiptsContext pattern)
-//   - module-level RECIPES state via src/lib/recipes.js (verbatim
-//     port of canonical L1160–1161); App owns the boot fetch +
-//     setRecipes call and the recipesVersion re-render bumper
-//   - updateRecipePage callback (verbatim from canonical L5793) —
-//     optimistic local mutation → background PATCH → rollback on
-//     error. Mirrors the optimistic-write pattern from 7d's pantry
-//     sync slice; AuditView's drilldown is the only caller today.
+// Migration history (most recent on top):
 //
-// 7f-1 added <LarderBrand> + <LarderFooter> around the active view
-// (verbatim ports of canonical L4824–4960 + L4961–4970), plus
-// suggestNextDelivery from canonical L4157 for the brand's
-// delivery subtitle.
+// 7g/7h — RecipesContext refactor + PlannerView port. The
+// module-level `let RECIPES` shape from 7e (`src/lib/recipes.js`,
+// now deleted) became a context: RecipesProvider owns the recipes
+// state, the updateRecipePage callback (verbatim canonical L5793),
+// and an internal version counter. AuditView migrated off props
+// (`updateRecipePage` + `recipesVersion` no longer threaded down
+// from App.jsx — both consumers use the `useRecipes()` hook).
+// PlannerView added as the second consumer, mounted on the new
+// "Cook" tab. Default tab also flipped from "pantry" → "planner"
+// (canonical-faithful, decision D2).
+//
+// 7f-3 added <TabIcon> glyphs to each navtab button (modern
+// monoline SVG + retro pixel-art, live-swapped via the
+// larder-brand-style-change CustomEvent that LarderBrand dispatches).
 //
 // 7f-2 replaced the 7e ?tab=audit URL toggle with a clickable
-// tab strip below <LarderBrand>. Tab state is in-memory only —
-// no URL sync (canonical-faithful, decision B1). TabIcon polish
-// arrives in 7f-3; until then tabs are text labels.
+// tab strip below <LarderBrand>. In-memory state only (B1).
+//
+// 7f-1 added <LarderBrand> + <LarderFooter> around the active
+// view, plus suggestNextDelivery for the brand's delivery subtitle.
+//
+// 7e expanded the scaffold from Pantry-only to Pantry + Audit,
+// wiring <ReceiptsProvider> + <AllergensProvider> around the tree.
+// `updateRecipePage` originally lived here (App.jsx) but moved
+// into RecipesContext in 7g/7h.
 // ============================================================
 
 export default function App() {
   return (
     <ReceiptsProvider>
       <AllergensProvider>
-        <AppInner />
+        <RecipesProvider>
+          <AppInner />
+        </RecipesProvider>
       </AllergensProvider>
     </ReceiptsProvider>
   );
@@ -74,26 +79,23 @@ function AppInner() {
   // failed PATCHes so the user can retry; keyed by item name.
   const [syncErrors, setSyncErrors] = useState({});
 
-  // ===== Recipes + cooked state (7e additions) =====
-  // recipesLoaded gates the initial render — mirrors canonical L5994
-  // ("if (!recipesLoaded || pantry.length === 0) return <NoData/>").
-  // RECIPES itself lives at module scope in src/lib/recipes.js; this
-  // bool just tracks whether the boot fetch's setRecipes call has run.
-  const [recipesLoaded, setRecipesLoaded] = useState(false);
-  // recipesVersion: integer bumped on every successful recipe mutation
-  // (currently only via updateRecipePage). AuditView's useMemo deps
-  // include this so a save anywhere refreshes the page-coverage rollup.
-  const [recipesVersion, setRecipesVersion] = useState(0);
+  // ===== Cooked log state (7e) =====
+  // Recipes moved into RecipesContext in 7g/7h — this file no longer
+  // owns recipes / recipesLoaded / recipesVersion / updateRecipePage.
+  // Cooked stays here for now; it's only consumed by PlannerView's
+  // "Cooked log" Section and AuditView's counter strip.
   const [cooked, setCooked] = useState([]);
 
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
 
-  // Tab state. Default to Pantry; click handlers on the tab strip
-  // below LarderBrand call setTab. No URL sync — matches canonical
-  // (decision B1 in step 7f-2). New views grow the `tabs` array.
-  const [tab, setTab] = useState("pantry");
+  // Tab state. Default to Planner (canonical-faithful, decision D2 in
+  // 7g). New views grow the `tabs` array. Order matches canonical
+  // L5555–5562 — planner / pantry / audit (with gaps + tesco + recipes
+  // pending future ports).
+  const [tab, setTab] = useState("planner");
   const tabs = [
+    ["planner", "Cook", "What to cook this week, grouped by what's expiring, what's whole-household-safe, and what's high-protein."],
     ["pantry", "Pantry", "Everything currently in the kitchen, with expiry and confidence tracking. Mark items out of stock if you've used them up."],
     ["audit", "Stats", ""],
   ];
@@ -108,17 +110,22 @@ function AppInner() {
   const { receipts } = useReceipts();
   const nextDelivery = useMemo(() => suggestNextDelivery(receipts), [receipts]);
 
-  // ---- Fetch pantry + recipes + cooked on mount ----
-  // ReceiptsProvider + AllergensProvider have already mounted and
-  // started their own fetches by the time this useEffect runs, so
-  // all five reads happen in parallel.
+  // ===== Recipes loading gate (E2 in 7g) =====
+  // RecipesProvider owns the boot fetch; we just need the loading flag
+  // here to drive the "No data returned" gate that mirrors canonical
+  // L5994 ("if (!recipesLoaded || pantry.length === 0)").
+  const { loading: recipesLoading } = useRecipes();
+
+  // ---- Fetch pantry + cooked on mount ----
+  // Recipes + receipts + allergens are each owned by their own Provider
+  // (mounted in the outer App wrapper); all three boot fetches run in
+  // parallel with this one.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const [pantryRows, recipeRows, cookedRows] = await Promise.all([
+        const [pantryRows, cookedRows] = await Promise.all([
           fetchPantry(),
-          fetchRecipes(),
           fetchCookedLog().catch((e) => {
             // cooked_log may have no rows / no read perms — non-fatal.
             console.warn("fetchCookedLog failed:", e);
@@ -139,11 +146,6 @@ function AppInner() {
         // in_freezer column is true.
         const frz = new Set(mappedPantry.filter(p => p._in_freezer).map(p => p.item));
         setInFreezer(frz);
-
-        // Recipes → module-level state via setRecipes (canonical pattern).
-        // AuditView reads from getRecipes() — same underlying binding.
-        setRecipes((recipeRows || []).map(mapRecipeRow));
-        setRecipesLoaded(true);
 
         // Cooked log — mapped through mapCookedRow to translate the DB
         // column names (recipe_id/cooked_date) to the UI shape
@@ -400,55 +402,11 @@ function AppInner() {
     };
   }, []);
 
-  // ===== updateRecipePage (verbatim port of canonical L5793) =====
-  // Update a recipe's source_page in Supabase, with an optimistic mutation
-  // of the module-level RECIPES array and a recipesVersion bump for re-render.
-  // `page` of null / "" / 0 stores null (clearing the value); otherwise a
-  // positive integer. Returns a promise so callers can await for UI states.
-  // On error: rolls back the local mutation, bumps recipesVersion again, and
-  // calls the optional onError callback so the per-row edit affordance can
-  // show a red dot the same way pantry rows do on sync failures.
-  const updateRecipePage = useCallback(async (recipeId, page, opts) => {
-    const onError = (opts && opts.onError) || null;
-    const recipe = getRecipes().find(r => r.id === recipeId);
-    if (!recipe) {
-      console.warn(`updateRecipePage: no recipe with id ${recipeId}`);
-      return;
-    }
-    // Coerce input. Treat null/empty/0/negative as "clear the page".
-    let nextPage = null;
-    if (page !== null && page !== undefined && page !== "") {
-      const n = parseInt(page, 10);
-      if (!isNaN(n) && n > 0) nextPage = n;
-    }
-    const prevPage = recipe.source && recipe.source.page;
-    if (prevPage === nextPage) return; // no-op
-    // Optimistic local update: rebuild RECIPES with a new array (so React's
-    // referential check fires on consumers that pass it through props/deps),
-    // mutating only the target row's source.page.
-    setRecipes(getRecipes().map(r => r.id === recipeId
-      ? { ...r, source: { ...(r.source || {}), page: nextPage } }
-      : r));
-    setRecipesVersion(v => v + 1);
-    // Fire PATCH in background.
-    try {
-      await patchRecipeRow(recipeId, { source_page: nextPage });
-    } catch (err) {
-      console.error(`Failed to sync source_page for recipe ${recipeId}:`, err);
-      // Roll back the local change.
-      setRecipes(getRecipes().map(r => r.id === recipeId
-        ? { ...r, source: { ...(r.source || {}), page: prevPage } }
-        : r));
-      setRecipesVersion(v => v + 1);
-      if (onError) onError(err);
-    }
-  }, []);
-
   // ---- Loading + error gates ----
   // Gate mirrors canonical L5976–6002: spinner while loading, error card
   // on fetch failure, "no data" card if Supabase responded but the
   // pantry/recipes tables came back empty.
-  if (loading) {
+  if (loading || recipesLoading) {
     return <div className="max-w-7xl mx-auto px-4 sm:px-6 py-20 text-center">
       <div className="inline-block animate-spin rounded-full h-10 w-10 border-2 border-stone-300 border-t-stone-800 mb-4"></div>
       <p className="text-stone-500 text-sm">Loading…</p>
@@ -464,11 +422,11 @@ function AppInner() {
       </div>
     </div>;
   }
-  if (!recipesLoaded || pantry.length === 0) {
+  if (pantry.length === 0) {
     return <div className="max-w-2xl mx-auto px-4 sm:px-6 py-20">
       <div className="card p-6">
         <h2 className="text-lg font-semibold mb-2">No data returned</h2>
-        <p className="text-sm text-stone-600">Supabase responded but the pantry or recipes table was empty.</p>
+        <p className="text-sm text-stone-600">Supabase responded but the pantry table was empty.</p>
         <button onClick={()=>location.reload()} className="pill mt-4">Reload</button>
       </div>
     </div>;
@@ -487,25 +445,26 @@ function AppInner() {
       ))}
     </div>
     {currentTabMeta && currentTabMeta[2] && <div className="tab-subtitle">{currentTabMeta[2]}</div>}
-    {tab === "audit"
-      ? <AuditView
-          pantry={pantry}
-          cooked={cooked}
-          outOfStock={outOfStock}
-          updateRecipePage={updateRecipePage}
-          recipesVersion={recipesVersion}
-        />
-      : <PantryView
-          pantry={pantry}
-          outOfStock={outOfStock}
-          toggleOutOfStock={toggleOutOfStock}
-          inFreezer={inFreezer}
-          toggleInFreezer={toggleInFreezer}
-          qtyAdjustments={qtyAdjustments}
-          adjustQty={adjustQty}
-          syncErrors={syncErrors}
-        />
-    }
+    {tab === "planner" && <PlannerView
+      pantry={pantry}
+      outOfStock={outOfStock}
+      cooked={cooked}
+    />}
+    {tab === "pantry" && <PantryView
+      pantry={pantry}
+      outOfStock={outOfStock}
+      toggleOutOfStock={toggleOutOfStock}
+      inFreezer={inFreezer}
+      toggleInFreezer={toggleInFreezer}
+      qtyAdjustments={qtyAdjustments}
+      adjustQty={adjustQty}
+      syncErrors={syncErrors}
+    />}
+    {tab === "audit" && <AuditView
+      pantry={pantry}
+      cooked={cooked}
+      outOfStock={outOfStock}
+    />}
     <LarderFooter />
   </div>;
 }

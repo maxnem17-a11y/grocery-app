@@ -9,38 +9,39 @@
 // behaviour identical):
 //   - hooks via named import from "react"
 //   - context reads use the extracted hooks
-//       useAllergens() / useReceipts()
-//     instead of canonical's bare
-//       useContext(AllergensContext) / useContext(ReceiptsContext)
-//   - RECIPES module global → getRecipes() from src/lib/recipes.js
-//     (same underlying `let RECIPES` binding; the helper just
-//     stops consumers from accidentally re-binding it)
+//       useAllergens() / useReceipts() / useRecipes()
+//     instead of canonical's bare useContext(...) calls
+//   - RECIPES module global → `recipes` read from RecipesContext.
+//     `updateRecipePage` + `version` (the canonical
+//     `recipesVersion`) come from the same hook — previously these
+//     were threaded through props from App.jsx, but post-7g/7h
+//     the context owns them since PlannerView is now a second
+//     consumer.
 //   - primitives + helpers imported, no inline definitions
 //
-// Props:
-//   pantry           — array of mapped pantry rows
-//   cooked           — array of mapped cooked-log rows (only the
-//                      length is consumed)
-//   outOfStock       — Set of item names currently flagged out
-//   updateRecipePage — App-scope callback that PATCHes a recipe's
-//                      source_page in Supabase. Verbatim canonical
-//                      L5793 semantics (optimistic local update →
-//                      background PATCH → rollback on error).
-//   recipesVersion   — integer; bumped by updateRecipePage so the
-//                      useMemos here re-evaluate after a save.
+// Props (post-7g):
+//   pantry      — array of mapped pantry rows
+//   cooked      — array of mapped cooked-log rows (only the
+//                 length is consumed)
+//   outOfStock  — Set of item names currently flagged out
 // ============================================================
 
 import { useMemo, useState } from "react";
 import { Bar, Chip, Section, Stat } from "./primitives.jsx";
 import { daysUntilExpiry, decayed, formatDate } from "../lib/pantry-math.js";
 import { audienceFromFlags, flagsForRecipe } from "../lib/allergens.js";
-import { getRecipes } from "../lib/recipes.js";
 import { useAllergens } from "../contexts/AllergensContext.jsx";
 import { useReceipts } from "../contexts/ReceiptsContext.jsx";
+import { useRecipes } from "../contexts/RecipesContext.jsx";
 
-export default function AuditView({pantry, cooked, outOfStock, updateRecipePage, recipesVersion}){
+export default function AuditView({pantry, cooked, outOfStock}){
   const { allergens } = useAllergens();
   const { receipts } = useReceipts();
+  // recipes + updateRecipePage + version come from RecipesContext (7g/7h
+  // refactor). Previously updateRecipePage + recipesVersion were threaded
+  // down from App.jsx as props; the context-based shape eliminates that
+  // drilling now that there are two consumers (AuditView + PlannerView).
+  const { recipes, updateRecipePage, version: recipesVersion } = useRecipes();
   // Global counters shown at the very top of the tab — moved here from the App
   // header in v9 so the home page stays focused on the brand block + tab nav.
   const oosSet = outOfStock || new Set();
@@ -49,10 +50,10 @@ export default function AuditView({pantry, cooked, outOfStock, updateRecipePage,
   const lastReceiptDate = receipts.length
     ? receipts.map(r => r.delivery_date).filter(Boolean).sort().pop()
     : null;
-  const decorated = useMemo(()=> getRecipes().map(r=>{
+  const decorated = useMemo(()=> recipes.map(r=>{
     const f = flagsForRecipe(r, allergens);
     return {...r, _flags:f, _audience: r.audience || audienceFromFlags(f)};
-  }), [allergens, recipesVersion]);
+  }), [recipes, allergens, recipesVersion]);
 
   const byAudience = {
     "whole-household": decorated.filter(r=>r._audience==="whole-household"),
@@ -60,12 +61,12 @@ export default function AuditView({pantry, cooked, outOfStock, updateRecipePage,
     "adults-only": decorated.filter(r=>r._audience==="adults-only"),
   };
   // Now most files have audience tags (we fixed them)
-  const taggedRecipes = getRecipes().filter(r => r.audience).length;
-  const untagged = getRecipes().length - taggedRecipes;
-  const hasMakeablePct = getRecipes().filter(r=> r.makeable_pct !== null && r.makeable_pct !== undefined).length;
+  const taggedRecipes = recipes.filter(r => r.audience).length;
+  const untagged = recipes.length - taggedRecipes;
+  const hasMakeablePct = recipes.filter(r=> r.makeable_pct !== null && r.makeable_pct !== undefined).length;
   const pantryWithFlags = pantry.filter(p=>p.allergen_flag).length;
 
-  const sources = [...new Set(getRecipes().map(r=>r._source_file))].sort();
+  const sources = [...new Set(recipes.map(r=>r._source_file))].sort();
   const bySource = sources.map(s => {
     const list = decorated.filter(r=>r._source_file===s);
     return {
@@ -86,7 +87,7 @@ export default function AuditView({pantry, cooked, outOfStock, updateRecipePage,
   // tab's drilldown or the Recipes-tab pencil affordance triggers a recompute,
   // which drops the missing count and updates the KPI cards in place.
   const { bookRecipes, missingPage, pagePct, missingByBook } = useMemo(() => {
-    const books = getRecipes().filter(r => r.source && r.source.type === "book");
+    const books = recipes.filter(r => r.source && r.source.type === "book");
     const missing = books.filter(r => r.source.page == null || r.source.page === "" || r.source.page === 0);
     const pct = books.length ? Math.round(100 * (books.length - missing.length) / books.length) : 100;
     const groups = new Map();
@@ -105,7 +106,7 @@ export default function AuditView({pantry, cooked, outOfStock, updateRecipePage,
       .map(g => ({ ...g, completePct: g.total ? Math.round(100 * (g.total - g.missing) / g.total) : 100 }))
       .sort((a, b) => b.missing - a.missing); // worst offenders first
     return { bookRecipes: books, missingPage: missing, pagePct: pct, missingByBook: byBook };
-  }, [recipesVersion]);
+  }, [recipes, recipesVersion]);
 
   // ── Drilldown UI state ──
   // Local-edit + export-to-SQL flow was removed in v28 — now that RLS on
@@ -153,7 +154,7 @@ export default function AuditView({pantry, cooked, outOfStock, updateRecipePage,
   return <div className="space-y-5">
     <div className="text-stone-600 text-sm border border-stone-200 rounded-lg px-4 py-3 flex flex-wrap items-baseline justify-between gap-3">
       <div className="flex flex-wrap items-baseline gap-x-1">
-        <span title="Total recipes across all sources">{getRecipes().length} recipes</span>
+        <span title="Total recipes across all sources">{recipes.length} recipes</span>
         <span className="text-stone-300">·</span>
         <span title="Items currently tracked in your pantry">{pantry.length} pantry items</span>
         <span className="text-stone-300">·</span>
@@ -168,11 +169,11 @@ export default function AuditView({pantry, cooked, outOfStock, updateRecipePage,
     <Section title="Workflow integrity" subtitle="Health check — green means all good, amber means a small fix is needed" tone="ok" collapsible defaultOpen={false}
       tip="Each card reports on one data-quality dimension: are all recipes tagged with an audience, are all pantry items tagged with an allergen flag, etc. Status chip on each card: ✓ OK = nothing to do, ⚠ Fix needed = small repair recommended, ⚠ Critical action needed = fix before relying on this data.">
       <div className="grid sm:grid-cols-2 gap-3 text-sm">
-        <GapCard label="Recipes with audience tag" value={taggedRecipes} of={getRecipes().length} severity={untagged > 0 ? "medium":"low"}
+        <GapCard label="Recipes with audience tag" value={taggedRecipes} of={recipes.length} severity={untagged > 0 ? "medium":"low"}
                  note={untagged > 0 ? `${untagged} recipes still untagged — re-import the patched files in /project-updates/.` : "All recipes now carry audience + eaters tags."}/>
         <GapCard label="Pantry items with allergen_flag" value={pantryWithFlags} of={pantry.length} severity={pantryWithFlags < pantry.length ? "medium":"low"}
                  note={pantryWithFlags < pantry.length ? "Some pantry items missing the allergen_flag field — re-import the patched current_pantry.json." : "All pantry items tagged."}/>
-        <GapCard label="makeable_pct populated" value={hasMakeablePct} of={getRecipes().length} severity="low"
+        <GapCard label="makeable_pct populated" value={hasMakeablePct} of={recipes.length} severity="low"
                  note="Computed live on every render in this dashboard. Not stored persistently in the JSON — that's fine since pantry changes invalidate it."/>
         <GapCard label="Derived subsets" value="Generated" of="2 files" severity="low"
                  note="khalil-safe-meals.json (38) and max-pescatarian.json (93) regenerated and shipped in /project-updates/."/>
@@ -318,11 +319,11 @@ export default function AuditView({pantry, cooked, outOfStock, updateRecipePage,
       collapsible defaultOpen={false}
       tip="How many recipes in each source file are safe for the whole household vs. adults-only vs. need-a-label-check. A high adults-only ratio means most recipes need adaptation if Khalil is eating.">
       <div className="grid sm:grid-cols-3 gap-3 mb-3">
-        <Stat label="Whole-household safe" value={byAudience["whole-household"].length} tone="ok" sub={`${Math.round(100*byAudience["whole-household"].length/getRecipes().length)}% of library`}
+        <Stat label="Whole-household safe" value={byAudience["whole-household"].length} tone="ok" sub={`${Math.round(100*byAudience["whole-household"].length/recipes.length)}% of library`}
           tip="Recipes with no Khalil-allergen ingredients (no eggs, dairy, wheat, lentils, peas, chickpeas, beans, avocado, beef, tree nuts) and that Max and Emily can also eat."/>
         <Stat label="Needs check" value={byAudience["check"].length} tone="warn"
           tip="Recipes that depend on a brand/label detail — usually soy sauce (use tamari for Khalil), oat products (check gluten), or similar."/>
-        <Stat label="Adults only" value={byAudience["adults-only"].length} tone="info" sub={`${Math.round(100*byAudience["adults-only"].length/getRecipes().length)}%`}
+        <Stat label="Adults only" value={byAudience["adults-only"].length} tone="info" sub={`${Math.round(100*byAudience["adults-only"].length/recipes.length)}%`}
           tipAlign="right"
           tip="Recipes containing a Khalil allergen with no easy adaptation. Plan a parallel Khalil-safe dish on these nights."/>
       </div>
