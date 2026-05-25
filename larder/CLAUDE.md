@@ -104,7 +104,7 @@ See `KNOWN_ISSUES.md`. The almond-milk → tree-nut classification gap is intent
 ## Current state
 
 **Last verified:** 2026-05-25
-**Last commit:** `HEAD` — Step 7g + 7h (PlannerView port + RecipesContext refactor; src/lib/recipes.js deleted; default tab → "planner"). See `git show HEAD` for the actual hash; next session should bump this line to that hash per the update protocol.
+**Last commit:** `094b579` — Step 7g + 7h (PlannerView port + RecipesContext refactor; src/lib/recipes.js deleted; default tab → "planner").
 **App shell:** `src/App.jsx` wraps the tree in `<ReceiptsProvider>` + `<AllergensProvider>` + `<RecipesProvider>` (recipes state + updateRecipePage now own their own context post-7g/7h), runs the pantry + cooked boot fetch, owns the pantry sync slice, mounts `<LarderBrand>` + a clickable tab strip with `<TabIcon>` glyphs + `<LarderFooter>` around the active view. Default tab is `"planner"` (canonical-faithful, decision D2). Tab state is in-memory only (no URL sync).
 **Smoke test:** ⚠ Browser smoke-test skipped in 7g per user direction (time pressure); correctness verified via static analysis + build green at 48 modules. Two latent bugs caught during static review and fixed pre-commit: (1) `updateRecipePage` race condition where `setState(updater)` snapshot pattern would not run synchronously in React 18 — replaced with a `recipesRef` mirror + sync effect; (2) AuditView `useMemo` deps were missing `recipes` after the `getRecipes()` → hook swap — added.
 
