@@ -26,12 +26,11 @@ grocery-app/                ← git root
     ├── CREDENTIALS.md      ← Supabase keys. Gitignored. Don't commit.
     ├── KNOWN_ISSUES.md     ← pre-existing bugs documented, not regressions
     ├── CLAUDE.md           ← this file
-    ├── index.html          ← Vite entry + canonical <style> block L30–97 inlined for CSS parity
+    ├── index.html          ← Vite entry + canonical <style> block L30–97 inlined for CSS parity + favicon <link>s (7f-followup)
     ├── package.json
     ├── vite.config.js
     ├── public/
-    │   └── icons/
-    │       └── larder-retro-192.png  ← retro jar (LarderBrand inline img); favicon swap still deferred
+    │   └── icons/          ← all 6 brand icons (modern + retro × 192/512/apple-touch); favicon swap wired post-7f-followup
     └── src/
         ├── main.jsx
         ├── App.jsx                ← app shell: 3 Provider wrap + boot fetch + brand chrome + clickable tab strip + pantry sync slice
@@ -54,7 +53,7 @@ grocery-app/                ← git root
             ├── PlannerView.jsx    ← Cook tab, verbatim port of canonical L2273–2340 (dead TescoSkus line stripped per 7g A1)
             ├── RecipesView.jsx    ← Recipes tab, verbatim port of canonical L1620–1825; recipes + updateRecipePage via useRecipes() hook
             ├── RecipeMicroList.jsx ← collapsible recipe card grid — used by PlannerView (EaterTile moved to primitives in 7i)
-            ├── LarderBrand.jsx    ← brand block: jar SVG/PNG + style toggle + delivery subtitle (favicon swap deferred — A2)
+            ├── LarderBrand.jsx    ← brand block: jar SVG/PNG + style toggle + delivery subtitle + favicon swap (post-7f-followup)
             ├── LarderFooter.jsx   ← "What's in your kitchen?" sign-off
             └── TabIcon.jsx        ← brand-style-aware tab icons (monoline modern + pixel-art retro); useBrandStyle co-located
 ```
@@ -105,7 +104,7 @@ See `KNOWN_ISSUES.md`. The almond-milk → tree-nut classification gap is intent
 ## Current state
 
 **Last verified:** 2026-05-25
-**Last commit:** `2196738` — Step 7i (RecipesView port + addCooked + eaterFilter; EaterTile promoted to primitive).
+**Last commit:** `HEAD` — Step 7f-followup (favicon `<link>` swap re-enabled; all 6 brand icons copied to `larder/public/icons/`). See `git show HEAD` for the actual hash; next session should bump this line to that hash per the update protocol.
 **App shell:** `src/App.jsx` wraps the tree in `<ReceiptsProvider>` + `<AllergensProvider>` + `<RecipesProvider>` (recipes state + updateRecipePage owned by RecipesContext post-7g/7h), runs the pantry + cooked boot fetch, owns the pantry sync slice + cooked-log mutation slice (`addCooked` / `cookedSyncErrors`), holds App-scope `eaterFilter` state for RecipesView, mounts `<LarderBrand>` + a clickable tab strip with `<TabIcon>` glyphs + `<LarderFooter>` around the active view. Default tab is `"planner"` (canonical-faithful). Tab state is in-memory only.
 **Smoke test:** ⚠ Browser smoke-test skipped in 7i per user direction (workflow change: "no need to wait for OK if confident"); correctness verified via static analysis + build green at 49 modules. Static review confirmed hook ordering, useMemo deps, addCooked closure semantics, page-edit input wires updateRecipePage via useRecipes(), and TabIcon "recipes" kind already implemented in 7f-3.
 
@@ -131,7 +130,7 @@ See `KNOWN_ISSUES.md`. The almond-milk → tree-nut classification gap is intent
 - `src/components/LarderBrand.jsx` (~155 lines, verbatim port of canonical L4824–4960 — step 7f-1; favicon DOM swap deferred per A2)
 - `src/components/LarderFooter.jsx` (~16 lines, verbatim port of canonical L4961–4970 — step 7f-1)
 - `src/components/TabIcon.jsx` (~360 lines, verbatim port of canonical L4977–5345 — step 7f-3; `useBrandStyle()` hook co-located; all 6 kinds × 2 styles; pure inline SVG, no image files)
-- `larder/public/icons/larder-retro-192.png` (single icon for LarderBrand's retro-jar inline `<img>` — step 7f-1, decision A2b; other icons + favicon `<link>`s still deferred)
+- `larder/public/icons/` — all 6 brand icons (modern + retro × 192 / 512 / apple-touch). Single retro-192 landed in 7f-1 (decision A2b) for LarderBrand's inline `<img>`; remaining 5 copied in 7f-followup alongside the favicon `<link>` swap.
 - `src/App.jsx` wires 3 Provider wrap + boot fetch (pantry + cooked) + pantry sync slice + cooked-log mutation slice (`addCooked` / `cookedSyncErrors` / `setCookedSyncError`) + `eaterFilter` state + brand chrome + tab strip with TabIcon glyphs (steps 7d / 7e / 7f-1 / 7f-2 / 7f-3 / 7g / 7i)
 - Canonical `<style>` block inlined into `larder/index.html` for CSS parity (step 7d)
 - `KNOWN_ISSUES.md`
@@ -215,6 +214,17 @@ Smoke tests:
 - **Reload resets to Pantry: PASSED.** No URL sync, no in-memory persistence (B1).
 - **No regressions: PASSED.** Pantry toggles + Audit KPIs + LarderBrand style toggle + Footer all retain prior green status.
 
+#### 7f-followup — favicon `<link>` swap re-enabled (Completed 2026-05-25)
+
+Closes out the 7f-1 A2 deferral. Three changes in one commit:
+- Five remaining icon PNGs copied from `grocery-app/icons/` → `larder/public/icons/` (modern × {192, 512, apple-touch}; retro × {512, apple-touch}). The retro-192 was already in place from 7f-1 A2b.
+- Three `<link>` elements (`#favicon-touch` / `#favicon-192` / `#favicon-512`) added to `larder/index.html` head — verbatim canonical L19-21 with initial hrefs pointing at the modern variants (default style).
+- Favicon DOM-swap block restored inside LarderBrand's style-change useEffect — verbatim canonical L4831-4838. Now when the user toggles modern ↔ retro, the in-page jar swaps AND the browser-tab/home-screen favicons swap to match.
+
+LarderBrand.jsx header comment updated to retire the "favicon swap deferred — A2" note.
+
+Smoke tests: SKIPPED in browser per user workflow. Static review confirmed: <link> ids match what the useEffect looks up; href format matches canonical; PNG files now resolve at the served path `/icons/larder-{style}-{192|512|apple-touch}.png` via Vite's public/ directory.
+
 #### 7i — RecipesView port + cooked-log mutation slice (Completed 2026-05-25)
 
 Third view port. RecipesView is the second consumer of cooked-log state (PlannerView + AuditView were readers; RecipesView is the first writer via `addCooked`).
@@ -296,10 +306,6 @@ Smoke tests:
 #### 7d-followup — verify `qty_adjustment` debounce coalescing
 
 Confirm that rapid clicks on the qty +/− buttons within a 150ms window produce a single coalesced PATCH (not one-per-click). Test approach: pin App in React DevTools, watch hooks 15 (`qtyDebounceTimers`) and 16 (`pendingQtyValues`); fire 5+ clicks programmatically via `$r` or a console snippet to guarantee sub-150ms cadence; expect one PATCH with cumulative value. Server-write correctness already proven in 7d. Pure optimisation verification.
-
-#### 7f-followup — favicon `<link>` swap + full icons folder
-
-Add the three `<link>` elements (`#favicon-touch` / `-192` / `-512`) to `larder/index.html`'s head; copy the remaining icon PNGs from `grocery-app/icons/` into `larder/public/icons/`; restore the DOM-rewrite block in `LarderBrand.jsx`'s style `useEffect`. Inline TODO in `LarderBrand.jsx` marks the spot.
 
 #### 7f-helpbanner — `HelpBanner` extraction (D2 follow-up)
 

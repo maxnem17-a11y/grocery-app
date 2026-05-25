@@ -4,6 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Larder</title>
+    <!-- Larder favicons — swapped at runtime by LarderBrand's style toggle.
+         Matches canonical /index.html L19–21 exactly. The toggle rewrites
+         these hrefs (modern ↔ retro) and persists choice via localStorage.
+         Added in 7f-followup; the icon PNGs live at larder/public/icons/. -->
+    <link id="favicon-touch" rel="apple-touch-icon" href="icons/larder-modern-apple-touch.png">
+    <link id="favicon-192" rel="icon" type="image/png" sizes="192x192" href="icons/larder-modern-192.png">
+    <link id="favicon-512" rel="icon" type="image/png" sizes="512x512" href="icons/larder-modern-512.png">
     <!--
       Canonical <style> block verbatim from /index.html L30–97 (the live
       single-file PWA at the git root). Inlined here in step 7d alongside

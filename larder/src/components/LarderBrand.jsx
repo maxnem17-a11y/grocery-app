@@ -9,13 +9,12 @@
 // Structural deviations vs canonical (no behaviour change):
 //   - hooks imported by name
 //   - `export default function`
-//   - **A2 (favicon swap omitted in step 7f-1)** — canonical
-//     also rewrites the `href` on `#favicon-touch`, `#favicon-192`,
-//     and `#favicon-512` in document.head when the style changes.
-//     The Vite scaffold's `larder/index.html` doesn't carry those
-//     `<link>` elements yet, so the DOM lookups are skipped. See
-//     TODO inside the useEffect below; restore alongside the
-//     icon-file plumbing in a follow-up step.
+//   - **Favicon swap re-enabled in 7f-followup.** Originally deferred
+//     in 7f-1 (decision A2) because the Vite scaffold's index.html
+//     didn't yet carry the favicon `<link>` elements. 7f-followup
+//     added them + copied the remaining icon PNGs into
+//     `larder/public/icons/`, so the canonical DOM-swap behaviour
+//     is now wired through the style-change effect.
 //
 // Props:
 //   pantry              — array of mapped pantry rows; drives fillPct
@@ -37,17 +36,19 @@ export default function LarderBrand({ pantry, nextDelivery, showHelpBanner, setS
     catch { return "modern"; }
   });
 
-  // Persist choice whenever style changes + notify listeners.
-  //
-  // TODO(7f-followup): favicon <link> swap. Canonical also rewrites
-  // the href on #favicon-touch / #favicon-192 / #favicon-512 in
-  // document.head. Vite's larder/index.html lacks those <link>
-  // elements (decision A2 in step 7f-1); the icon PNGs at the
-  // canonical repo's icons/ folder also need to be served by Vite.
-  // Restore the DOM lookups here when both pieces land.
+  // Persist choice whenever style changes + notify listeners + rewrite
+  // favicon <link> hrefs. The favicon swap was re-enabled in 7f-followup
+  // (the <link> elements now live in larder/index.html and the icon PNGs
+  // in larder/public/icons/ — see canonical L19-21 for the link shape).
   useEffect(() => {
     try { localStorage.setItem("larder-brand-style", style); } catch {}
-    // Notify other components (e.g. TabIcon, when ported in 7f-3) that the brand style has changed.
+    const t = document.getElementById("favicon-touch");
+    const i192 = document.getElementById("favicon-192");
+    const i512 = document.getElementById("favicon-512");
+    if (t) t.href = `icons/larder-${style}-apple-touch.png`;
+    if (i192) i192.href = `icons/larder-${style}-192.png`;
+    if (i512) i512.href = `icons/larder-${style}-512.png`;
+    // Notify other components (e.g. TabIcon) that the brand style has changed.
     try { window.dispatchEvent(new CustomEvent("larder-brand-style-change", { detail: style })); } catch {}
   }, [style]);
 
