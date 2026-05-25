@@ -17,6 +17,7 @@ import RecipesView from "./components/RecipesView.jsx";
 import LarderBrand from "./components/LarderBrand.jsx";
 import LarderFooter from "./components/LarderFooter.jsx";
 import TabIcon from "./components/TabIcon.jsx";
+import { HelpBanner } from "./components/primitives.jsx";
 import { ReceiptsProvider, useReceipts } from "./contexts/ReceiptsContext.jsx";
 import { AllergensProvider } from "./contexts/AllergensContext.jsx";
 import { RecipesProvider, useRecipes } from "./contexts/RecipesContext.jsx";
@@ -96,6 +97,17 @@ function AppInner() {
   // Eater-filter state for RecipesView (step 7i). App-scope so it
   // persists across tab switches — matches canonical L5550.
   const [eaterFilter, setEaterFilter] = useState("all");
+
+  // Help banner — closed by default; opens when the user clicks the
+  // "? Help" pill rendered in LarderBrand's style-toggle row.
+  // Verbatim port of canonical L5439–5443 (step 7f-helpbanner). Note:
+  // the dismiss handler writes a `help-dismissed` localStorage flag
+  // that's never read back in canonical — preserved verbatim.
+  const [showHelpBanner, setShowHelpBanner] = useState(false);
+  const dismissHelpBanner = useCallback(() => {
+    setShowHelpBanner(false);
+    try { localStorage.setItem("grocery-intelligence-v1:help-dismissed", "1"); } catch {}
+  }, []);
 
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
@@ -546,7 +558,13 @@ function AppInner() {
   }
 
   return <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-10">
-    <LarderBrand pantry={pantry} nextDelivery={nextDelivery} />
+    <LarderBrand
+      pantry={pantry}
+      nextDelivery={nextDelivery}
+      showHelpBanner={showHelpBanner}
+      setShowHelpBanner={setShowHelpBanner}
+    />
+    {showHelpBanner && <HelpBanner onDismiss={dismissHelpBanner}/>}
     <div className="flex flex-wrap gap-0 mb-1 border-b border-stone-200">
       {tabs.map(([k, l]) => (
         <button key={k} data-active={tab === k} onClick={() => setTab(k)} className="navtab">

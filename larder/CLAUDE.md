@@ -104,7 +104,7 @@ See `KNOWN_ISSUES.md`. The almond-milk → tree-nut classification gap is intent
 ## Current state
 
 **Last verified:** 2026-05-25
-**Last commit:** `a479e87` — Step 7f-followup (favicon `<link>` swap re-enabled; all 6 brand icons copied to `larder/public/icons/`).
+**Last commit:** `HEAD` — Step 7f-helpbanner (HelpBanner extraction + showHelpBanner state + ? Help pill wired). See `git show HEAD` for the actual hash; next session should bump this line to that hash per the update protocol.
 **App shell:** `src/App.jsx` wraps the tree in `<ReceiptsProvider>` + `<AllergensProvider>` + `<RecipesProvider>` (recipes state + updateRecipePage owned by RecipesContext post-7g/7h), runs the pantry + cooked boot fetch, owns the pantry sync slice + cooked-log mutation slice (`addCooked` / `cookedSyncErrors`), holds App-scope `eaterFilter` state for RecipesView, mounts `<LarderBrand>` + a clickable tab strip with `<TabIcon>` glyphs + `<LarderFooter>` around the active view. Default tab is `"planner"` (canonical-faithful). Tab state is in-memory only.
 **Smoke test:** ⚠ Browser smoke-test skipped in 7i per user direction (workflow change: "no need to wait for OK if confident"); correctness verified via static analysis + build green at 49 modules. Static review confirmed hook ordering, useMemo deps, addCooked closure semantics, page-edit input wires updateRecipePage via useRecipes(), and TabIcon "recipes" kind already implemented in 7f-3.
 
@@ -121,7 +121,7 @@ See `KNOWN_ISSUES.md`. The almond-milk → tree-nut classification gap is intent
 - `src/contexts/ReceiptsContext.jsx` (~57 lines, ReceiptsProvider + useReceipts hook — step 7c, consumed by AuditView from 7e + by App for nextDelivery in 7f-1)
 - `src/contexts/AllergensContext.jsx` (~75 lines, AllergensProvider + useAllergens hook, EMPTY_ALLERGENS fallback — step 7e; consumed by AuditView + PlannerView)
 - `src/contexts/RecipesContext.jsx` (~135 lines, RecipesProvider + useRecipes hook + recipesRef sync mirror + updateRecipePage callback + version counter — step 7g/7h)
-- `src/components/primitives.jsx` (~155 lines, InfoTip / SortHeader / Chip / Bar / Stat — step 7a/7d; Section appended in 7e; AudienceTag appended in 7g; EaterTile promoted from RecipeMicroList in 7i)
+- `src/components/primitives.jsx` (~185 lines, InfoTip / SortHeader / Chip / Bar / Stat — step 7a/7d; Section appended in 7e; AudienceTag appended in 7g; EaterTile promoted from RecipeMicroList in 7i; HelpBanner appended in 7f-helpbanner)
 - `src/components/PantryView.jsx` (~232 lines, verbatim port of canonical L1388–1617 — step 7d)
 - `src/components/AuditView.jsx` (~330 lines, verbatim port of canonical L4485–4809 incl. co-located GapCard — step 7e; recipes via useRecipes() post-7g; prop signature reduced to `{pantry, cooked, outOfStock}`)
 - `src/components/PlannerView.jsx` (~110 lines, verbatim port of canonical L2273–2340 with dead TescoSkusContext line stripped — step 7g, decision A1)
@@ -213,6 +213,17 @@ Smoke tests:
 - **URL reader removed: PASSED.** `localhost:5173/?tab=audit` lands on Pantry (URL no longer steers state).
 - **Reload resets to Pantry: PASSED.** No URL sync, no in-memory persistence (B1).
 - **No regressions: PASSED.** Pantry toggles + Audit KPIs + LarderBrand style toggle + Footer all retain prior green status.
+
+#### 7f-helpbanner — HelpBanner extraction (Completed 2026-05-25)
+
+Closes the D2 deferral from 7f-1. HelpBanner introductory panel surfaces when the user clicks the "? Help" pill in LarderBrand's style-toggle row.
+
+- `src/components/primitives.jsx` — `HelpBanner` appended (verbatim canonical L1297–1318). Uses the `.help-banner` CSS class already in `larder/index.html` from 7d's canonical CSS paste.
+- `src/App.jsx` — `showHelpBanner` useState (default `false`) + `dismissHelpBanner` useCallback (verbatim canonical L5439–5443). LarderBrand now receives `showHelpBanner` + `setShowHelpBanner` props so the `? Help` pill renders. `<HelpBanner onDismiss={dismissHelpBanner}/>` mounts conditionally below LarderBrand.
+
+Verbatim-with-note: canonical's `dismissHelpBanner` writes a `help-dismissed` localStorage key that nothing in canonical reads back. Same dead-code shape as the TescoSkusContext line stripped in 7g/A1. Preserved here (the write is harmless; banner defaults to closed regardless of the key); flagged in the App.jsx comment.
+
+Smoke tests: SKIPPED in browser per workflow. Static review: HelpBanner is a stateless component (no hooks); ? Help pill render guard `setShowHelpBanner && !showHelpBanner` correctly hides the button when banner is open; build green at 49 modules unchanged (HelpBanner exported from existing primitives.jsx file).
 
 #### 7f-followup — favicon `<link>` swap re-enabled (Completed 2026-05-25)
 
@@ -306,10 +317,6 @@ Smoke tests:
 #### 7d-followup — verify `qty_adjustment` debounce coalescing
 
 Confirm that rapid clicks on the qty +/− buttons within a 150ms window produce a single coalesced PATCH (not one-per-click). Test approach: pin App in React DevTools, watch hooks 15 (`qtyDebounceTimers`) and 16 (`pendingQtyValues`); fire 5+ clicks programmatically via `$r` or a console snippet to guarantee sub-150ms cadence; expect one PATCH with cumulative value. Server-write correctness already proven in 7d. Pure optimisation verification.
-
-#### 7f-helpbanner — `HelpBanner` extraction (D2 follow-up)
-
-Extract `HelpBanner` from canonical L1297–1318 into `primitives.jsx`; add `showHelpBanner` state + dismiss callback (canonical L5440) + `help-dismissed` localStorage key (`LS_KEY + ':help-dismissed'`) to `App.jsx`; pass `setShowHelpBanner` to `<LarderBrand>` so the `? Help` button surfaces. Independent of tab chrome — can land anytime.
 
 #### 7j — TescoSkusContext extraction (unblocks OrdersView + SuggestedBasket)
 

@@ -10,6 +10,7 @@
 // Contents (in canonical-file order):
 //   - InfoTip       L1249–1265   (step 7d)
 //   - SortHeader    L1272–1295   (step 7d)
+//   - HelpBanner    L1297–1318   (step 7f-helpbanner)
 //   - Chip          L1319–1329   (step 7d)
 //   - AudienceTag   L1330–1334   (step 7g; uses <Chip> internally)
 //   - Bar           L1335–1338   (step 7d)
@@ -18,11 +19,6 @@
 //   - EaterTile     L1827–1838   (moved here in step 7i from
 //                                 RecipeMicroList.jsx — second
 //                                 consumer landed: RecipesView)
-//
-// Deliberately omitted from this file:
-//   - HelpBanner (L1297–1318)    — see 7f-helpbanner in Next
-// Append here when a later view extraction needs them; same
-// file, no parallel primitives module.
 // ============================================================
 
 import { useState } from "react";
@@ -73,6 +69,33 @@ export function SortHeader({ colSpan, sortKey, sortBy, sortDir, onClick, align =
   >
     {children}
     {active && <span className="text-stone-700 text-[9px]">{chevron}</span>}
+  </div>;
+}
+
+// HelpBanner — introductory explainer panel above the active view.
+// Hidden by default; surfaces when the user clicks the ? Help pill in
+// LarderBrand. Dismissal returns it to the hidden state. Verbatim port
+// of canonical L1297–1318.
+export function HelpBanner({ onDismiss }) {
+  return <div className="help-banner rounded-xl p-4 mb-4">
+    <div className="flex items-start justify-between gap-3">
+      <div className="flex-1">
+        <h2>What is this dashboard?</h2>
+        <p className="text-sm text-stone-700 mt-1.5 leading-relaxed">
+          A read-mostly view of your household's groceries: what's in the pantry, what to cook this week, what you've bought from Tesco, and what's likely missing.
+          Your edits (out-of-stock toggles, cooked log, qty adjustments) sync to Supabase automatically and persist across devices. Receipt parsing and bulk recipe updates still happen via Claude.
+        </p>
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-1.5 mt-3 text-xs text-stone-700">
+          <div><strong>Cook</strong> — what to cook this week, grouped by need.</div>
+          <div><strong>Recipes</strong> — search/filter the full library.</div>
+          <div><strong>Pantry</strong> — current stock + expiry + confidence.</div>
+          <div><strong>Orders</strong> — Tesco delivery history (read-only).</div>
+          <div><strong>Basket</strong> — your next shop: likely gaps + leverage picks.</div>
+          <div><strong>Stats</strong> — library coverage + allergen audit.</div>
+        </div>
+      </div>
+      <button onClick={onDismiss} className="text-xs text-stone-500 hover:text-stone-800 underline shrink-0">dismiss</button>
+    </div>
   </div>;
 }
 
