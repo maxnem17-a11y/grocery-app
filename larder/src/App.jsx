@@ -11,6 +11,7 @@ import {
   patchPantryRow,
 } from "./lib/supabase.js";
 import { suggestNextDelivery } from "./lib/delivery.js";
+import { computeExpires } from "./lib/pantry-math.js";
 import PantryView from "./components/PantryView.jsx";
 import AuditView from "./components/AuditView.jsx";
 import PlannerView from "./components/PlannerView.jsx";
@@ -392,21 +393,40 @@ function AppInner() {
 
   // ===== Replenishment slice =====
   // Applies an approved replenishment plan from ReplenishmentPreview: each
-  // input row gets purchased=deliveryDate + out_of_stock=false. Optimistic
-  // local update on both `pantry` and `outOfStock`, single batch PATCH via
-  // PostgREST `?id=in.(...)`, rollback on failure. Throws on error so the
-  // preview component can keep `busy=false` and let the user retry.
+  // input row gets purchased=deliveryDate + out_of_stock=false, plus a fresh
+  // expires date computed from the row's category (so the Expires column
+  // doesn't stay pinned to the previous cycle's value). Rows whose category
+  // isn't in SHELF_LIFE_DAYS keep their existing expires untouched.
+  //
+  // Rows are grouped by their new expires date so each group can be PATCHed
+  // in one PostgREST round-trip (uniform body per group). Typical receipt
+  // hits 3-5 categories → 3-5 parallel round-trips instead of N.
+  //
+  // Optimistic local update covers purchased + out_of_stock + expires;
+  // rollback restores all three on failure. Throws on error so the preview
+  // component can keep `busy=false` and let the user retry.
   const applyReplenishment = useCallback(async (rows, deliveryDate) => {
     if (!rows || rows.length === 0) return;
-    const ids = rows.map(r => r.id);
-    const idSet = new Set(ids);
+    const idSet = new Set(rows.map(r => r.id));
     const itemSet = new Set(rows.map(r => r.item));
+
+    // Per-row new expires (null = leave the existing value alone).
+    const idToExpires = new Map();
+    for (const r of rows) {
+      const row = pantry.find(p => p.id === r.id);
+      if (!row) continue;
+      idToExpires.set(r.id, computeExpires(row.category, deliveryDate));
+    }
 
     // Snapshot prior state for rollback.
     const priorPantry = new Map();
     for (const p of pantry) {
       if (idSet.has(p.id)) {
-        priorPantry.set(p.id, { purchased: p.purchased, _out_of_stock: p._out_of_stock });
+        priorPantry.set(p.id, {
+          purchased: p.purchased,
+          _out_of_stock: p._out_of_stock,
+          expires: p.expires,
+        });
       }
     }
     const priorOos = new Set();
@@ -415,23 +435,43 @@ function AppInner() {
     }
 
     // Optimistic local update.
-    setPantry(prev => prev.map(p =>
-      idSet.has(p.id) ? { ...p, purchased: deliveryDate, _out_of_stock: false } : p
-    ));
+    setPantry(prev => prev.map(p => {
+      if (!idSet.has(p.id)) return p;
+      const newExpires = idToExpires.get(p.id);
+      return {
+        ...p,
+        purchased: deliveryDate,
+        _out_of_stock: false,
+        expires: newExpires || p.expires,
+      };
+    }));
     setOutOfStock(prev => {
       const next = new Set(prev);
       for (const name of itemSet) next.delete(name);
       return next;
     });
 
+    // Group rows by their new expires date (null grouped separately so they
+    // share the same `no expires field in body` PATCH).
+    const groups = new Map(); // key (expires-string|"_keep") -> { expires, ids }
+    for (const [id, exp] of idToExpires) {
+      const key = exp || "_keep";
+      if (!groups.has(key)) groups.set(key, { expires: exp, ids: [] });
+      groups.get(key).ids.push(id);
+    }
+
     try {
-      await batchPatchPantryRows(ids, { purchased: deliveryDate, out_of_stock: false });
+      await Promise.all([...groups.values()].map(g => {
+        const body = { purchased: deliveryDate, out_of_stock: false };
+        if (g.expires) body.expires = g.expires;
+        return batchPatchPantryRows(g.ids, body);
+      }));
     } catch (err) {
       console.error("Failed to apply replenishment:", err);
       // Rollback.
       setPantry(prev => prev.map(p => {
         const prior = priorPantry.get(p.id);
-        return prior ? { ...p, purchased: prior.purchased, _out_of_stock: prior._out_of_stock } : p;
+        return prior ? { ...p, ...prior } : p;
       }));
       setOutOfStock(prev => {
         const next = new Set(prev);

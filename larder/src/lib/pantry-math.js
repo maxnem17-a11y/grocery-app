@@ -134,3 +134,37 @@ export function addDays(iso, n) {
   d.setUTCDate(d.getUTCDate() + n);
   return d.toISOString().slice(0, 10);
 }
+
+// Per-category default shelf life (days) after purchase. Used by the
+// replenishment flow to bump pantry_items.expires when an item is
+// re-purchased, so the Expires column doesn't stay stuck on a previous
+// cycle's date. Categories not listed here keep their existing expires
+// value (replenishment leaves the field alone).
+//
+// Numbers are conservative; tweak in the source if a category's
+// freshness window doesn't match real-world experience.
+export const SHELF_LIFE_DAYS = {
+  produce:          5,
+  protein:          4,
+  dairy:            7,
+  "dairy-alt":      7,
+  bread:            5,
+  frozen:           90,
+  tinned:           730,
+  "tinned-protein": 730,
+  "dry-goods":      365,
+  seasoning:        365,
+  "nuts-seeds":     180,
+  condiment:        180,
+  snack:            60,
+};
+
+// Compute the default expires date for a category + purchased ISO date.
+// Returns null if the category is unknown — callers should leave the
+// existing expires value as-is in that case.
+export function computeExpires(category, purchasedIso) {
+  if (!category || !purchasedIso) return null;
+  const days = SHELF_LIFE_DAYS[category];
+  if (days == null) return null;
+  return addDays(purchasedIso, days);
+}
