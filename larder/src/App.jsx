@@ -410,12 +410,19 @@ function AppInner() {
     const idSet = new Set(rows.map(r => r.id));
     const itemSet = new Set(rows.map(r => r.item));
 
-    // Per-row new expires (null = leave the existing value alone).
+    // Per-row new expires (null = leave the existing value alone). The
+    // computed default never SHORTENS the existing expires — if the row
+    // already has an expires date later than computed (e.g. frozen-ahead
+    // or hand-curated long shelf), keep the existing value. This way the
+    // category default is a floor for short/stale data, not a ceiling.
     const idToExpires = new Map();
     for (const r of rows) {
       const row = pantry.find(p => p.id === r.id);
       if (!row) continue;
-      idToExpires.set(r.id, computeExpires(row.category, deliveryDate));
+      const computed = computeExpires(row.category, deliveryDate);
+      if (!computed) { idToExpires.set(r.id, null); continue; }
+      if (row.expires && row.expires >= computed) { idToExpires.set(r.id, null); continue; }
+      idToExpires.set(r.id, computed);
     }
 
     // Snapshot prior state for rollback.
