@@ -141,6 +141,27 @@ function AppInner() {
   const { receipts } = useReceipts();
   const nextDelivery = useMemo(() => suggestNextDelivery(receipts), [receipts]);
 
+  // Rotating kitchen-themed loading message — picked once per page load (empty
+  // deps), stable across re-renders inside a single loading screen, reshuffles
+  // on reload. Verbatim canonical L5959-5974. Must sit above the early-returns
+  // below so hook order stays identical on every render path.
+  const LOADING_MESSAGES = [
+    "Turning on the hob…",
+    "Reading the recipe…",
+    "Stocking the pantry…",
+    "Warming the pan…",
+    "Chopping the onions…",
+    "Preheating the oven…",
+    "Sharpening the knives…",
+    "Setting the table…",
+    "Putting the kettle on…",
+    "Measuring the spices…",
+  ];
+  const loadingMessage = useMemo(
+    () => LOADING_MESSAGES[Math.floor(Math.random() * LOADING_MESSAGES.length)],
+    []
+  );
+
   // ===== Recipes loading gate (E2 in 7g) =====
   // RecipesProvider owns the boot fetch; we just need the loading flag
   // here to drive the "No data returned" gate that mirrors canonical
@@ -541,7 +562,7 @@ function AppInner() {
   if (loading || recipesLoading) {
     return <div className="max-w-7xl mx-auto px-4 sm:px-6 py-20 text-center">
       <div className="inline-block animate-spin rounded-full h-10 w-10 border-2 border-stone-300 border-t-stone-800 mb-4"></div>
-      <p className="text-stone-500 text-sm">Loading…</p>
+      <p className="text-stone-500 text-sm">{loadingMessage}</p>
     </div>;
   }
   if (loadError) {
