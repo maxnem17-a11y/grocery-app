@@ -493,9 +493,15 @@ Confirm that rapid clicks on the qty +/− buttons within a 150ms window produce
 
 ### Deferred
 
-**ReceiptsRefreshContext** — sister context exposing `refresh()` and `localAppend()` for the ReceiptParser save flow. Lives at canonical `index.html` L5364–L5385, wraps the app at L6005. Add when ReceiptParser itself is being ported.
+**A3 — per-item keyword table in Supabase.** Replace the static `PANTRY_KEYWORDS` dict in `lib/pricing.js` with a teachable `pantry_keywords` column (text[]) on `pantry_items`, plus an inline "teach the matcher" UI in ReplenishmentPreview's unmatched bucket ("Add 'chicken wings' → chicken row?"). Highest-quality matcher; biggest build (schema change + edit UI + migration). Open when matcher false-positive rate hurts or unmatched-count annoys.
 
-**SKU index** (`buildSkuIndex` / `lookupSku` / `TescoSkusContext`) — tightly coupled with views. Extract alongside the first view that consumes them.
+**Proper Tailwind compiler.** Currently using the JIT CDN (`<script src="https://cdn.tailwindcss.com">` in `larder/index.html`) — dev-mode per Tailwind docs but works in prod at the cost of ~50KB runtime + brief FOUC. Replace with `tailwindcss + postcss + autoprefixer` proper build pipeline. ~30 min of work. Open if performance becomes a complaint or you want to delete the CDN warning in the console.
+
+**Per-item expires edit UI on Pantry tab.** No way to hand-set a use-by date today; the `expires` field is CSV-seeded + category-default-bumped. Would unlock the "use-by from pack" workflow (snap a pack date into the row). The "expires never shortens" guard from today is already there for this.
+
+**Replenish-from-OrdersView button.** Add a "Replenish" affordance next to each row in OrdersView so historical orders can be reconciled without re-uploading the receipt or using MCP. Same `applyReplenishment` callback, different invocation point. Cheap (~50 lines).
+
+**Canonical legacy URL.** `grocery-app/legacy/` is git-archived but not URL-served (D2-lite). If a fallback URL ever becomes useful, copy into `larder/public/legacy/` + add icon subfolder so the canonical's relative favicon hrefs resolve. Probably not needed.
 
 ### Update protocol
 At the end of each session, update the "Current state" section above:
