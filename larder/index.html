@@ -13,6 +13,12 @@
     <link id="favicon-512" rel="icon" type="image/png" sizes="512x512" href="icons/larder-modern-512.png">
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1c1c1c">
+    <!-- Tailwind utility classes are used throughout src/components — load the
+         JIT CDN that canonical used (legacy/index.html L26). Dev-mode per
+         Tailwind docs, but works in production for a small PWA like this.
+         If we ever want a proper build-time pipeline, install tailwindcss +
+         postcss + autoprefixer and replace this script with a CSS import. -->
+    <script src="https://cdn.tailwindcss.com"></script>
     <!--
       Canonical <style> block verbatim from /index.html L30–97 (the live
       single-file PWA at the git root). Inlined here in step 7d alongside
