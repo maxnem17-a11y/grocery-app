@@ -1,0 +1,29 @@
+{
+  "name": "Larder — Grocery Intelligence",
+  "short_name": "Larder",
+  "description": "Household pantry, recipes, and meal planning",
+  "start_url": "/grocery-app/",
+  "scope": "/grocery-app/",
+  "display": "standalone",
+  "background_color": "#b9c660",
+  "theme_color": "#1c1c1c",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "icons/larder-modern-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icons/larder-modern-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "icons/larder-modern-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
