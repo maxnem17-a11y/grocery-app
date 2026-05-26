@@ -16,6 +16,7 @@
 //   - Bar           L1335–1338   (step 7d)
 //   - Stat          L1339–1361   (step 7d; uses <InfoTip> internally)
 //   - Section       L1362–1385   (step 7e; uses <InfoTip> internally)
+//   - KV            L2621–2627   (step 7k; OrdersView + ReceiptParser)
 //   - EaterTile     L1827–1838   (moved here in step 7i from
 //                                 RecipeMicroList.jsx — second
 //                                 consumer landed: RecipesView)
@@ -168,6 +169,17 @@ export function Stat({ label, value, tone, sub, tip, tipAlign, onClick, expanded
     </div>
     <div className={`text-2xl font-semibold mt-0.5 ${tmap[tone] || ""}`}>{value}</div>
     {sub && <div className="text-xs text-stone-500 mt-0.5">{sub}</div>}
+  </div>;
+}
+
+// KV — small label/value card used by OrdersView (KPI strip) and
+// ReceiptParser (parsed-order summary). Verbatim port of canonical
+// L2621-2627. Added in 7k.
+export function KV({ label, value, sub }) {
+  return <div className="card px-3 py-2.5">
+    <div className="text-[11px] text-stone-500 uppercase tracking-wider">{label}</div>
+    <div className="font-medium text-base">{value}</div>
+    {sub && <div className="text-[11px] text-stone-500 mt-0.5">{sub}</div>}
   </div>;
 }
 

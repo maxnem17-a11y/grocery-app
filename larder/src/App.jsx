@@ -15,6 +15,7 @@ import AuditView from "./components/AuditView.jsx";
 import PlannerView from "./components/PlannerView.jsx";
 import RecipesView from "./components/RecipesView.jsx";
 import GapsView from "./components/GapsView.jsx";
+import OrdersView from "./components/OrdersView.jsx";
 import LarderBrand from "./components/LarderBrand.jsx";
 import LarderFooter from "./components/LarderFooter.jsx";
 import TabIcon from "./components/TabIcon.jsx";
@@ -126,6 +127,7 @@ function AppInner() {
     ["recipes", "Recipes", "Search and filter every recipe in your library. Sort by makeability, protein, or prep time."],
     ["pantry", "Pantry", "Everything currently in the kitchen, with expiry and confidence tracking. Mark items out of stock if you've used them up."],
     ["gaps", "Basket", "Your next shop — likely gaps plus the leverage picks that unlock the most recipes. Items you buy regularly that are missing from both your latest order and the pantry are candidates for the basket."],
+    ["tesco", "Orders", "Past Tesco deliveries — spend trends, repeat purchases, substitutions, and Khalil allergen exposure. Read-only."],
     ["audit", "Stats", ""],
   ];
   const currentTabMeta = tabs.find(t => t[0] === tab);
@@ -609,6 +611,7 @@ function AppInner() {
       pantry={pantry}
       outOfStock={outOfStock}
     />}
+    {tab === "tesco" && <OrdersView pantry={pantry} />}
     {tab === "audit" && <AuditView
       pantry={pantry}
       cooked={cooked}

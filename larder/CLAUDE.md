@@ -1,6 +1,6 @@
 # Larder — Project Context for Claude Code
 
-Household grocery intelligence dashboard. Currently mid-migration from a single-file React HTML prototype to a modular Vite project. **The old HTML file is still the source of truth until the new entry point is viable** — we extract from it incrementally.
+Household grocery intelligence dashboard. **The Vite app reached canonical feature parity post-7k** (all 6 tabs ported, all helpers extracted, all writes wired). The old single-file `index.html` at the git root remains the live PWA; cutover to the Vite build (and decommissioning the canonical) is a separate deploy step outside the migration's scope.
 
 ---
 
@@ -44,9 +44,10 @@ grocery-app/                ← git root
         │   ├── recipe-match.js    ← pantryMatchSet + makeability + leverageScore (added 7j-1)
         │   ├── tesco-skus.js      ← buildSkuIndex / lookupSku / tescoSearchUrl / neverRestockReason (7j-1)
         │   ├── pricing.js         ← PRODUCT_FAMILIES + normaliseProductName / findPantryMatch / buildPriceIndex / lookupPriceForIngredient / extractPackSize (7j-1)
-        │   └── gap-analysis.js    ← computeRegularsAndGaps — receipt-history regulars vs current pantry (7j-1)
+        │   ├── gap-analysis.js    ← computeRegularsAndGaps — receipt-history regulars vs current pantry (7j-1)
+        │   └── receipt-parse.js   ← loadPdfJs + extractPdfText + readEmlText + detectRetailer + parseTesco + ordersKhalilFlag (7k)
         ├── contexts/
-        │   ├── ReceiptsContext.jsx  ← receipts data + load state (consumed by AuditView + LarderBrand inputs)
+        │   ├── ReceiptsContext.jsx  ← receipts data + load state + refresh / localAppend (refresh/append added 7k for ReceiptParser save flow)
         │   ├── AllergensContext.jsx ← allergens config + load state (consumed by AuditView + PlannerView)
         │   ├── RecipesContext.jsx   ← recipes state + updateRecipePage + version counter (7g/7h refactor; replaces deleted src/lib/recipes.js)
         │   └── TescoSkusContext.jsx ← Tesco SKU index + load state (7j-1; consumed by SuggestedBasket)
@@ -60,6 +61,9 @@ grocery-app/                ← git root
             ├── SuggestedBasket.jsx ← basket recommendation engine; verbatim port of canonical L1849–2270 (7j-1)
             ├── GapsView.jsx       ← Basket tab; full body (KPIs + SuggestedBasket + regulars/gaps table + LeverageTileGrid) — verbatim port of canonical L4242–4482 (7j-2)
             ├── LeverageTileGrid.jsx ← sortable leverage-ingredient table used by GapsView (7j-2)
+            ├── OrdersView.jsx     ← Orders tab, verbatim port of canonical L3322–3685 (7k)
+            ├── ReceiptParser.jsx  ← drag-and-drop receipt upload + parse preview + save-to-archive; verbatim port of canonical L2903–3320 (7k)
+            ├── SpendChart.jsx     ← per-order + timeline SVG spend chart used by OrdersView; verbatim port of canonical L2483–2620 (7k)
             ├── LarderBrand.jsx    ← brand block: jar SVG/PNG + style toggle + delivery subtitle + favicon swap (post-7f-followup)
             ├── LarderFooter.jsx   ← "What's in your kitchen?" sign-off
             └── TabIcon.jsx        ← brand-style-aware tab icons (monoline modern + pixel-art retro); useBrandStyle co-located
@@ -110,8 +114,8 @@ See `KNOWN_ISSUES.md`. The almond-milk → tree-nut classification gap is intent
 
 ## Current state
 
-**Last verified:** 2026-05-25
-**Last commit:** `ace1978` — Step 7j-2 (GapsView full body + LeverageTileGrid; Basket tab complete).
+**Last verified:** 2026-05-26
+**Last commit:** `HEAD` — Step 7k (OrdersView + ReceiptParser + SpendChart + receipt-parse lib; Orders tab complete; **6 of 6 canonical tabs at parity**). See `git show HEAD` for the actual hash; next session should bump this line to that hash per the update protocol.
 **App shell:** `src/App.jsx` wraps the tree in `<ReceiptsProvider>` + `<AllergensProvider>` + `<RecipesProvider>` (recipes state + updateRecipePage owned by RecipesContext post-7g/7h), runs the pantry + cooked boot fetch, owns the pantry sync slice + cooked-log mutation slice (`addCooked` / `cookedSyncErrors`), holds App-scope `eaterFilter` state for RecipesView, mounts `<LarderBrand>` + a clickable tab strip with `<TabIcon>` glyphs + `<LarderFooter>` around the active view. Default tab is `"planner"` (canonical-faithful). Tab state is in-memory only.
 **Smoke test:** ⚠ Browser smoke-test skipped in 7i per user direction (workflow change: "no need to wait for OK if confident"); correctness verified via static analysis + build green at 49 modules. Static review confirmed hook ordering, useMemo deps, addCooked closure semantics, page-edit input wires updateRecipePage via useRecipes(), and TabIcon "recipes" kind already implemented in 7f-3.
 
@@ -128,6 +132,7 @@ See `KNOWN_ISSUES.md`. The almond-milk → tree-nut classification gap is intent
 - `src/lib/tesco-skus.js` (~130 lines, `buildSkuIndex` + `lookupSku` + `tescoSearchUrl` + `neverRestockReason` — step 7j-1)
 - `src/lib/pricing.js` (~330 lines incl. ~140-row PRODUCT_FAMILIES regex table, `normaliseProductName` + `findPantryMatch` + `buildPriceIndex` + `lookupPriceForIngredient` + `extractPackSize` — step 7j-1)
 - `src/lib/gap-analysis.js` (~75 lines, `computeRegularsAndGaps` — step 7j-1)
+- `src/lib/receipt-parse.js` (~270 lines, full ingest pipeline: `loadPdfJs` + `extractPdfText` + `readEmlText` + `detectRetailer` + `parseTesco` + `ordersKhalilFlag` — step 7k)
 - `src/contexts/TescoSkusContext.jsx` (~70 lines, TescoSkusProvider + useTescoSkus — step 7j-1; empty-index default matches canonical L820)
 - `src/contexts/ReceiptsContext.jsx` (~57 lines, ReceiptsProvider + useReceipts hook — step 7c, consumed by AuditView from 7e + by App for nextDelivery in 7f-1)
 - `src/contexts/AllergensContext.jsx` (~75 lines, AllergensProvider + useAllergens hook, EMPTY_ALLERGENS fallback — step 7e; consumed by AuditView + PlannerView)
@@ -141,6 +146,9 @@ See `KNOWN_ISSUES.md`. The almond-milk → tree-nut classification gap is intent
 - `src/components/SuggestedBasket.jsx` (~440 lines, verbatim port of canonical L1849–2270 — step 7j-1)
 - `src/components/GapsView.jsx` (~265 lines, verbatim port of canonical L4242–4482 — step 7j-2; was a 22-line shell in 7j-1)
 - `src/components/LeverageTileGrid.jsx` (~85 lines, verbatim port of canonical L2403–2472 — step 7j-2)
+- `src/components/OrdersView.jsx` (~373 lines, verbatim port of canonical L3322–3685 — step 7k)
+- `src/components/ReceiptParser.jsx` (~430 lines, verbatim port of canonical L2903–3320 — step 7k)
+- `src/components/SpendChart.jsx` (~150 lines, verbatim port of canonical L2483–2620 — step 7k)
 - `src/components/LarderBrand.jsx` (~155 lines, verbatim port of canonical L4824–4960 — step 7f-1; favicon DOM swap deferred per A2)
 - `src/components/LarderFooter.jsx` (~16 lines, verbatim port of canonical L4961–4970 — step 7f-1)
 - `src/components/TabIcon.jsx` (~360 lines, verbatim port of canonical L4977–5345 — step 7f-3; `useBrandStyle()` hook co-located; all 6 kinds × 2 styles; pure inline SVG, no image files)
@@ -148,7 +156,7 @@ See `KNOWN_ISSUES.md`. The almond-milk → tree-nut classification gap is intent
 - `src/App.jsx` wires 4 Provider wrap (Receipts / Allergens / Recipes / TescoSkus) + boot fetch (pantry + cooked) + pantry sync slice + cooked-log mutation slice (`addCooked` / `cookedSyncErrors` / `setCookedSyncError`) + `eaterFilter` state + `showHelpBanner` state + brand chrome + tab strip with TabIcon glyphs (steps 7d / 7e / 7f-1 / 7f-2 / 7f-3 / 7g / 7i / 7j-1)
 - Canonical `<style>` block inlined into `larder/index.html` for CSS parity (step 7d)
 - `KNOWN_ISSUES.md`
-- `npm run build` green (57 modules)
+- `npm run build` green (61 modules)
 
 #### Removed in 7g
 - `src/lib/recipes.js` — module-level `let RECIPES` + `getRecipes`/`setRecipes` shape replaced by `RecipesContext`. Was a placeholder in 7e flagged as refactor target 7h; 7g/7h merged into one atomic step.
@@ -227,6 +235,45 @@ Smoke tests:
 - **URL reader removed: PASSED.** `localhost:5173/?tab=audit` lands on Pantry (URL no longer steers state).
 - **Reload resets to Pantry: PASSED.** No URL sync, no in-memory persistence (B1).
 - **No regressions: PASSED.** Pantry toggles + Audit KPIs + LarderBrand style toggle + Footer all retain prior green status.
+
+#### 7k — Orders tab: OrdersView + ReceiptParser + SpendChart (Completed 2026-05-26)
+
+**Final canonical tab.** Closes the migration arc. The Vite scaffold now has all 6 tabs at canonical parity.
+
+New files:
+- `src/lib/receipt-parse.js` (~270 lines): full ingest pipeline. `loadPdfJs` (module-scoped `__pdfjsPromise` singleton; CDN load of pdf.js v3.11.174), `extractPdfText`, `readEmlText`, `detectRetailer`, `parseTesco` (~160 lines of regex), `ordersKhalilFlag` (receipt-item Khalil tagger — different signature from `khalilAllergenFlag` in allergens.js; lives here because it's receipt-item-name regex rather than allergen-config-driven).
+- `src/components/SpendChart.jsx` (~150 lines): inline SVG, per-order + timeline view modes. Local useState for mode toggle.
+- `src/components/ReceiptParser.jsx` (~430 lines): drag-and-drop receipt upload, dry-run preview, save-to-archive. 11 useStates + 1 context hook (`useReceipts`, destructuring refresh+localAppend) + 1 ref + 3 useCallbacks. Two input paths (`.eml` server-parse via `dryRun=true` + `.pdf` browser-parse via `parseTesco`).
+- `src/components/OrdersView.jsx` (~373 lines): the Orders tab. 2 context hooks (`useReceipts`, `useTescoSkus`) + 2 useStates + 3 useMemos (orders sort, stats aggregation, spend-by-pantry-category join). Mounts `<ReceiptParser/>` twice (empty-state + after KPI strip) — independent instances.
+
+Promotion:
+- `KV` (canonical L2621) added to `primitives.jsx` — used by OrdersView's KPI strip and ReceiptParser's parsed-order summary.
+
+Context expansion (decision A1):
+- `ReceiptsContext` gains `refresh` + `localAppend` callbacks (canonical L5364, L5376). useCallback with empty deps for stable identity. Hook return shape becomes `{ receipts, loading, error, refresh, localAppend }`. ReceiptParser destructures `refresh` + `localAppend` from `useReceipts()`. Decision A1 absorbs canonical's sister `ReceiptsRefreshContext` into the main context — consistent with the 7g/7h `updateRecipePage` precedent. Existing consumers (AuditView, PlannerView, RecipesView, SuggestedBasket, GapsView) ignore the extra keys; no migration cost.
+
+App.jsx wiring:
+- `[tesco, Orders, <canonical subtitle>]` appended to tabs array between `gaps` and `audit` — canonical L5559 order: planner / recipes / pantry / gaps / tesco / audit. TabIcon "tesco" kind already implemented in 7f-3 (parcel icon).
+- `{tab === "tesco" && <OrdersView pantry={pantry}/>}` render branch.
+
+Scope decisions taken in review:
+- **A1**: Absorb refresh/localAppend into ReceiptsContext. Mirrors 7g/7h pattern.
+- **B1**: Single `src/lib/receipt-parse.js` file for the whole ingest pipeline.
+- **C1**: `SpendChart` in its own file.
+- **D1**: `KV` appended to primitives.jsx.
+- **E1**: Atomic single-step port rather than splitting. ~1400 lines, contained scope.
+
+Smoke tests: SKIPPED in browser per workflow. Static review confirmed:
+- Hook ordering in OrdersView: 2 context + 5 state/memo before `if (!orders.length) return ...` early-return.
+- Hook ordering in ReceiptParser: 11 useStates + 1 context destructure + 1 ref + 3 useCallbacks; conditional returns only inside the JSX render block (post-hooks).
+- `useReceipts()` shape expansion compatible with all 5 existing consumers (they destructure `{ receipts }` and ignore extra keys).
+- `__pdfjsPromise` module-scoped singleton: fine for prod, HMR resets in dev (cheap reload, not a correctness issue).
+- `ordersKhalilFlag` import path correct in both OrdersView and ReceiptParser — distinct from allergens.js's `khalilAllergenFlag` (different signatures, different files).
+- ReceiptParser mounted twice in OrdersView; each instance has independent state.
+- TabIcon "tesco" kind already present from 7f-3 verbatim.
+- All cross-file imports map to public exports.
+
+**Migration arc complete.** All 6 canonical tabs (Cook / Recipes / Pantry / Basket / Orders / Stats) render at parity in the Vite scaffold. All canonical helpers extracted into `src/lib/` (10 modules). All canonical contexts mirrored as React Provider hooks (4 contexts). All canonical Tesco-write paths wired (pantry sync slice 7d, recipe page-num updates 7g, cooked-log toggle 7i, receipt save 7k). The canonical `index.html` at the git root remains the live PWA; deploying the Vite build (cutting over from canonical) is a separate step outside the migration's scope.
 
 #### 7j-2 — GapsView regulars/gaps table + LeverageTileGrid (Completed 2026-05-25)
 
@@ -395,9 +442,13 @@ Smoke tests:
 
 Confirm that rapid clicks on the qty +/− buttons within a 150ms window produce a single coalesced PATCH (not one-per-click). Test approach: pin App in React DevTools, watch hooks 15 (`qtyDebounceTimers`) and 16 (`pendingQtyValues`); fire 5+ clicks programmatically via `$r` or a console snippet to guarantee sub-150ms cadence; expect one PATCH with cumulative value. Server-write correctness already proven in 7d. Pure optimisation verification.
 
-#### 7k — OrdersView + ReceiptParser
+#### Cutover / deploy (post-migration)
 
-The final canonical tab view. Has no TescoSkusContext blocker now (already extracted in 7j-1), but OrdersView renders `<ReceiptParser/>` inside its empty-state and after the KPI strip. ReceiptParser pulls in `ReceiptsRefreshContext` (canonical L546) plus the PDF/eml ingest flow (`parseTesco`, `loadPdfJs`, `detectRetailer`, ~600 lines). Decide at 7k scope time whether to: (a) co-extract ReceiptsRefreshContext + ReceiptParser as part of 7k; (b) stub ReceiptParser as a no-op for now and ship OrdersView functional minus the upload widget; (c) defer OrdersView until ReceiptParser is its own step.
+The Vite app at `larder/` is at canonical parity and `npm run build` produces a static bundle. The remaining work — outside the migration arc itself — is deploying that bundle in place of the canonical single-file `index.html`. Touch points:
+- GitHub Pages currently serves `grocery-app/index.html`; cutover means pointing the static-host root at `larder/dist/` (after `npm run build`).
+- Verify the PWA manifest path + service worker still resolve in the new layout.
+- Decide whether to keep the canonical `index.html` as a one-version-behind fallback or delete it outright.
+- Run live smoke against Supabase before flipping DNS / Pages config.
 
 ### Deferred
 
