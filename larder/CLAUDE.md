@@ -9,7 +9,7 @@ Household grocery intelligence dashboard. **Cutover complete (2026-05-26):** the
 - **Build:** Vite (no Tailwind compiler — base utility classes only, see "Constraints" below)
 - **UI:** React 18, no router yet
 - **Data:** Supabase (PostgREST) — credentials in `CREDENTIALS.md` (gitignored)
-- **Deploy:** Static PWA — `index.html` at the git root (parent of this directory) is the live single-file build until the Vite migration is shipped
+- **Deploy:** GitHub Pages via Actions — `.github/workflows/deploy.yml` builds `larder/dist/` on push-to-main and publishes to https://maxnem17-a11y.github.io/grocery-app/. Tailwind utility classes resolve via the JIT CDN (`<script src="https://cdn.tailwindcss.com">` in `larder/index.html`, matching what canonical did).
 
 ---
 
@@ -38,27 +38,28 @@ grocery-app/                ← git root
     │   └── service-worker.js ← kill-switch for legacy installed clients (Cutover-3)
     └── src/
         ├── main.jsx
-        ├── App.jsx                ← app shell: 3 Provider wrap + boot fetch + brand chrome + clickable tab strip + pantry sync slice
+        ├── App.jsx                ← app shell: 4 Provider wrap + boot fetch + brand chrome + clickable tab strip + pantry sync slice + cooked-log slice + replenishment slice
         ├── lib/
-        │   ├── supabase.js        ← sbFetch / sbWrite + mapReceiptRow / mapPantryRow / mapRecipeRow / mapCookedRow / patchPantryRow / patchRecipeRow
+        │   ├── supabase.js        ← sbFetch / sbWrite + mapReceiptRow / mapPantryRow / mapRecipeRow / mapCookedRow + patchPantryRow / batchPatchPantryRows / patchRecipeRow / ingestReceipt
         │   ├── text.js            ← string normalisation
         │   ├── allergens.js       ← Khalil/Max/Emily filter logic
-        │   ├── pantry-math.js     ← pure pantry/confidence calculations
+        │   ├── pantry-math.js     ← pure pantry/confidence calculations + SHELF_LIFE_DAYS table + computeExpires (post-replenishment expires-bump)
         │   ├── household-rules.js ← never_restock patterns
         │   ├── delivery.js        ← suggestNextDelivery(receipts) — receipt cadence → next predicted delivery
         │   ├── recipe-match.js    ← pantryMatchSet + makeability + leverageScore (added 7j-1)
         │   ├── tesco-skus.js      ← buildSkuIndex / lookupSku / tescoSearchUrl / neverRestockReason (7j-1)
         │   ├── pricing.js         ← PRODUCT_FAMILIES + normaliseProductName / findPantryMatch / buildPriceIndex / lookupPriceForIngredient / extractPackSize (7j-1)
         │   ├── gap-analysis.js    ← computeRegularsAndGaps — receipt-history regulars vs current pantry (7j-1)
-        │   └── receipt-parse.js   ← loadPdfJs + extractPdfText + readEmlText + detectRetailer + parseTesco + ordersKhalilFlag (7k)
+        │   ├── receipt-parse.js   ← loadPdfJs + extractPdfText + readEmlText + detectRetailer + parseTesco + ordersKhalilFlag (7k)
+        │   └── replenishment.js   ← computeReplenishment(orderItems, pantry, deliveryDate) → {matched, ambiguous, unmatched}; PANTRY_KEYWORDS dict + token-subset substring fallback
         ├── contexts/
         │   ├── ReceiptsContext.jsx  ← receipts data + load state + refresh / localAppend (refresh/append added 7k for ReceiptParser save flow)
         │   ├── AllergensContext.jsx ← allergens config + load state (consumed by AuditView + PlannerView)
         │   ├── RecipesContext.jsx   ← recipes state + updateRecipePage + version counter (7g/7h refactor; replaces deleted src/lib/recipes.js)
         │   └── TescoSkusContext.jsx ← Tesco SKU index + load state (7j-1; consumed by SuggestedBasket)
         └── components/
-            ├── primitives.jsx     ← InfoTip / SortHeader / Chip / AudienceTag / Bar / Stat / Section / EaterTile
-            ├── PantryView.jsx     ← Pantry tab, verbatim port of canonical L1388–1617
+            ├── primitives.jsx     ← InfoTip / SortHeader / HelpBanner / Chip / AudienceTag / Bar / Stat / Section / KV / EaterTile
+            ├── PantryView.jsx     ← Pantry tab; verbatim port of canonical L1388–1617 + post-cutover "Last ordered" sortable column
             ├── AuditView.jsx      ← Stats tab, verbatim port of canonical L4485–4809 (incl. co-located GapCard); recipes via useRecipes() hook post-7g
             ├── PlannerView.jsx    ← Cook tab, verbatim port of canonical L2273–2340 (dead TescoSkus line stripped per 7g A1)
             ├── RecipesView.jsx    ← Recipes tab, verbatim port of canonical L1620–1825; recipes + updateRecipePage via useRecipes() hook
@@ -67,7 +68,8 @@ grocery-app/                ← git root
             ├── GapsView.jsx       ← Basket tab; full body (KPIs + SuggestedBasket + regulars/gaps table + LeverageTileGrid) — verbatim port of canonical L4242–4482 (7j-2)
             ├── LeverageTileGrid.jsx ← sortable leverage-ingredient table used by GapsView (7j-2)
             ├── OrdersView.jsx     ← Orders tab, verbatim port of canonical L3322–3685 (7k)
-            ├── ReceiptParser.jsx  ← drag-and-drop receipt upload + parse preview + save-to-archive; verbatim port of canonical L2903–3320 (7k)
+            ├── ReceiptParser.jsx  ← drag-and-drop receipt upload + parse preview + save-to-archive; mounts ReplenishmentPreview after successful save (post-cutover)
+            ├── ReplenishmentPreview.jsx ← three-bucket preview (auto-matched checkboxes / ambiguous dropdowns / no-match list) surfaced after receipt save (post-cutover)
             ├── SpendChart.jsx     ← per-order + timeline SVG spend chart used by OrdersView; verbatim port of canonical L2483–2620 (7k)
             ├── LarderBrand.jsx    ← brand block: jar SVG/PNG + style toggle + delivery subtitle + favicon swap (post-7f-followup)
             ├── LarderFooter.jsx   ← "What's in your kitchen?" sign-off
@@ -120,7 +122,7 @@ See `KNOWN_ISSUES.md`. The almond-milk → tree-nut classification gap is intent
 ## Current state
 
 **Last verified:** 2026-05-26
-**Last commit:** `HEAD` — Cutover-3 (archive canonical to `legacy/`, persist kill-switch SW in Vite build). **Cutover complete:** Vite build is live at https://maxnem17-a11y.github.io/grocery-app/ via Pages-via-Actions.
+**Last commit:** `f32137c` — post-cutover refinement: applyReplenishment bumps `expires` from category SHELF_LIFE_DAYS so just-replenished perishables don't show as overdue. Live at https://maxnem17-a11y.github.io/grocery-app/.
 **App shell:** `src/App.jsx` wraps the tree in `<ReceiptsProvider>` + `<AllergensProvider>` + `<RecipesProvider>` (recipes state + updateRecipePage owned by RecipesContext post-7g/7h), runs the pantry + cooked boot fetch, owns the pantry sync slice + cooked-log mutation slice (`addCooked` / `cookedSyncErrors`), holds App-scope `eaterFilter` state for RecipesView, mounts `<LarderBrand>` + a clickable tab strip with `<TabIcon>` glyphs + `<LarderFooter>` around the active view. Default tab is `"planner"` (canonical-faithful). Tab state is in-memory only.
 **Smoke test:** ⚠ Browser smoke-test skipped in 7i per user direction (workflow change: "no need to wait for OK if confident"); correctness verified via static analysis + build green at 49 modules. Static review confirmed hook ordering, useMemo deps, addCooked closure semantics, page-edit input wires updateRecipePage via useRecipes(), and TabIcon "recipes" kind already implemented in 7f-3.
 
@@ -452,6 +454,35 @@ Vite build is live at https://maxnem17-a11y.github.io/grocery-app/ via Pages-via
 Live smoke (post-merge): `curl -sI` against `/`, `/assets/index-<hash>.js`, and `/manifest.json` all return 200 with expected content-types and the new manifest's icon paths.
 
 Rollback: restore `legacy/index.html` → repo root, change Pages source back to "Deploy from branch", push. Two-step revert.
+
+#### Post-cutover refinements (Completed 2026-05-26)
+
+Same-day follow-ups after the live build landed.
+
+**Tailwind CDN restore** (`21a71b0`). The Vite scaffold had no Tailwind, so utility classes (`flex`, `gap-2`, `text-stone-500`, `bg-teal-700`, etc.) were inert and the layout rendered unstyled — visibly worse than canonical. Restored canonical's `<script src="https://cdn.tailwindcss.com">` tag in `larder/index.html`. Dev-mode-per-Tailwind-docs but works in production at the cost of ~50KB runtime download + brief FOUC. Proper compiler pipeline (tailwindcss + postcss + autoprefixer) deferred.
+
+**Rotating loading messages** (`116cfd6`). Boot gate said "Loading…"; canonical (legacy L5959–5979) picks one of 10 kitchen-themed messages at random per page load via `useMemo([])`. Verbatim port, placed alongside `nextDelivery` above all early-returns so hook order stays identical across loading / loadError / no-data / happy-path renders.
+
+**Pantry replenishment from receipt save — option B from scope** (`a51ec99`). The canonical never wired automatic pantry replenishment to receipt ingest; the pantry has been hand-curated since the initial 2026-05-13 CSV seed. The 2026-05-24 order was saved to `receipts` + `receipt_items` but didn't touch `pantry_items.purchased` — only "pomegranate seeds" was manually marked. Built the full pipeline:
+- `src/lib/replenishment.js` (~120 lines): `computeReplenishment(orderItems, pantry, deliveryDate)` returns `{matched, ambiguous, unmatched}`. PANTRY_KEYWORDS dict pass first (catches "oat drink" → "oat milk"); token-subset substring fallback (tokenise both sides, drop pack-size + stopword noise, plural-strip trailing s on tokens ≥4 chars, accept if pantry tokens are a subset of receipt tokens). Skips status='unavailable' items + pantry rows where `purchased >= deliveryDate` (preserves manual edits).
+- `src/lib/supabase.js`: `batchPatchPantryRows(ids, fields)` via PostgREST `?id=in.(uuid1,uuid2,...)`.
+- `src/components/ReplenishmentPreview.jsx` (~180 lines): three-bucket UI (auto-matched checkboxes / ambiguous dropdowns / no-match collapsed list) + Apply button. Deduped selection by pantry row id.
+- `src/App.jsx`: `applyReplenishment(rows, deliveryDate)` callback mirrors the pantry-sync slice pattern — snapshot prior state, optimistic local update on `pantry` + `outOfStock`, batch PATCH, rollback on failure.
+- `ReceiptParser.jsx`: mounts the preview after `saveState ∈ {saved, replaced, duplicate}` and `!replenishHandled`; resets per uploaded file.
+
+Decisions taken in scope review: **A2** (PANTRY_KEYWORDS + token-subset substring fallback), **B2** (three-bucket preview), **C1** (match the substitute name, not the original), **D1** (skip rows where `purchased >= deliveryDate`), **E1** (one-off MCP backfill for the 2026-05-24 order). **A3** (per-item keyword table in DB) deferred.
+
+E1 backfill ran via MCP: 17 rows updated (matches the preview's auto-match output, minus the 2 false-positive uncheckables — "Tesco Frozen Sliced Red Onions" → fresh `red onion`, "Tesco Naturally Sweet Sweetcorn" → `sweetcorn (can)` via PANTRY_KEYWORDS — and minus pomegranate seeds already at 2026-05-24).
+
+Static-trace eyeball before shipping: 40 receipt items → ~22 auto-matches (16 unique pantry rows after dedup), 0 ambiguous, 18 correctly unmatched (chicken wings / raspberries / iceberg / etc. — items with no pantry row). ~95% precision; preview gates everything for review.
+
+**"Last ordered" sortable column on Pantry grid** (`ed4a75f`). Surfaces `purchased` date + days-since as a sortable column between Freshness and Expires. Qty column shrunk from col-span-3 to col-span-2 to make room. Default sort dir is desc (most-recent-first).
+
+**`expires`-bump on replenishment** (`f32137c`). Bug after replenishment shipped: just-replenished perishables (chicken, salmon, bananas, etc.) showed as "overdue" in the Expires column because `applyReplenishment` updated `purchased` but left the stale CSV-seeded `expires` alone — also inflated the "Expiring ≤5d" KPI.
+- `pantry-math.js`: `SHELF_LIFE_DAYS` map (13 categories: produce 5, protein 4, dairy 7, dairy-alt 7, bread 5, frozen 90, tinned 730, tinned-protein 730, dry-goods 365, seasoning 365, nuts-seeds 180, condiment 180, snack 60) + `computeExpires(category, purchasedIso)` helper. Unknown categories return null and the PATCH leaves expires unchanged.
+- `applyReplenishment`: per-row new expires from category shelf life, grouped by computed date so each group gets one PostgREST batch PATCH (3–5 round-trips instead of N). Optimistic local update + rollback cover expires too.
+- One-off backfill UPDATE via MCP for stale rows globally (`(expires IS NULL OR purchased > expires) AND category IN (...)`). 9 rows fixed: protein → +4d, produce → +5d, bread → +5d, dairy-alt → +7d.
+- Always-overwrite for simplicity. Tesco receipts don't include use-by dates, and there's no per-item expires edit UI, so there are no hand-curated values at risk today. Guard rail ("only-if-stale") deferred — add when/if a use-by edit workflow lands.
 
 ### Next
 
