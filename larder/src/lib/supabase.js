@@ -343,6 +343,17 @@ export async function patchPantryRow(id, fields) {
   return sbWrite("PATCH", `pantry_items?id=eq.${id}`, fields);
 }
 
+// Batch PATCH for the replenishment flow: applies the same `fields` to
+// every row whose id is in `ids`. PostgREST handles this in one round-trip
+// via `?id=in.(uuid1,uuid2,...)`. Returns the updated rows on success,
+// throws on failure. Callers that need per-row error handling should
+// fall back to patchPantryRow in a loop.
+export async function batchPatchPantryRows(ids, fields) {
+  if (!ids || !ids.length) return [];
+  const inList = ids.map((id) => String(id)).join(",");
+  return sbWrite("PATCH", `pantry_items?id=in.(${inList})`, fields);
+}
+
 // PATCH a single recipe row by id. Mirrors patchPantryRow but hits the
 // `recipes` table. As of v27, public.recipes has RLS disabled, so anon
 // PATCHes succeed — this is fine for the narrow case of editing source_page

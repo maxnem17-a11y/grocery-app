@@ -30,14 +30,16 @@
 //   - helpers + primitives imported
 // ============================================================
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Chip, KV, Section } from "./primitives.jsx";
 import { formatDate } from "../lib/pantry-math.js";
 import { ingestReceipt } from "../lib/supabase.js";
 import { detectRetailer, extractPdfText, ordersKhalilFlag, parseTesco, readEmlText } from "../lib/receipt-parse.js";
+import { computeReplenishment } from "../lib/replenishment.js";
 import { useReceipts } from "../contexts/ReceiptsContext.jsx";
+import ReplenishmentPreview from "./ReplenishmentPreview.jsx";
 
-export default function ReceiptParser(){
+export default function ReceiptParser({pantry, applyReplenishment}){
   const [status, setStatus]   = useState("idle"); // idle | loading | done | error
   const [parsed, setParsed]   = useState(null);
   const [errorMsg, setError]  = useState(null);
@@ -71,8 +73,23 @@ export default function ReceiptParser(){
   // a new file.
   const [saveState, setSaveState] = useState("idle"); // idle | saving | saved | replaced | duplicate | error
   const [saveResult, setSaveResult] = useState(null); // { receipt_id?, previous_id?, existing_id?, existing_delivery_date?, message? }
+  // Once the user clicks Apply or Skip in the replenishment preview, this
+  // flips so the preview unmounts. Stays per-file (resets on a new upload).
+  const [replenishHandled, setReplenishHandled] = useState(false);
   const { refresh: refreshReceipts, localAppend: localAppendReceipt } = useReceipts();
   const inputRef = useRef(null);
+
+  // Replenishment bucket-up of the parsed receipt against the current
+  // pantry. Recomputed whenever either side changes; null when we don't
+  // have enough to compute (no parsed order, no delivery date, empty
+  // pantry, or no applyReplenishment callback wired). Must sit above any
+  // conditional return so hook order is identical across renders.
+  const replenishResult = useMemo(() => {
+    if (!parsed || !parsed.items || !parsed.delivery_date) return null;
+    if (!pantry || pantry.length === 0) return null;
+    if (!applyReplenishment) return null;
+    return computeReplenishment(parsed.items, pantry, parsed.delivery_date);
+  }, [parsed, pantry, applyReplenishment]);
 
   const handleFile = useCallback(async (file) => {
     if (!file) return;
@@ -86,6 +103,7 @@ export default function ReceiptParser(){
     setInputMode(null);
     setRawEml(null);
     setArchiveStatus(null);
+    setReplenishHandled(false);
     try {
       const lower = file.name.toLowerCase();
       const isPdf = lower.endsWith(".pdf") || file.type === "application/pdf";
@@ -451,6 +469,27 @@ export default function ReceiptParser(){
             <pre className="text-[10px] mono bg-white border border-stone-200 rounded p-2 max-h-64 overflow-auto whitespace-pre-wrap mt-2">{jsonBlob}</pre>
           )}
         </div>
+
+        {/* Replenishment preview — surface after any successful save path
+            (saved / replaced / duplicate). Duplicate still gets the preview so
+            historical orders that never replenished can be reconciled by
+            re-uploading the same receipt. Hides once the user clicks Apply
+            or Skip; resets when a new file is uploaded. */}
+        {replenishResult
+         && (saveState === "saved" || saveState === "replaced" || saveState === "duplicate")
+         && !replenishHandled
+         && (replenishResult.matched.length || replenishResult.ambiguous.length || replenishResult.unmatched.length) > 0
+         && (
+          <ReplenishmentPreview
+            result={replenishResult}
+            deliveryDate={parsed.delivery_date}
+            onApply={async (rows) => {
+              await applyReplenishment(rows, parsed.delivery_date);
+              setReplenishHandled(true);
+            }}
+            onCancel={() => setReplenishHandled(true)}
+          />
+        )}
       </div>
     )}
   </Section>;

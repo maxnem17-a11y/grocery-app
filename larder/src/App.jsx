@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   SUPABASE,
+  batchPatchPantryRows,
   deleteCookedLog,
   fetchCookedLog,
   fetchPantry,
@@ -389,6 +390,58 @@ function AppInner() {
     }, 150);
   }, [qtyAdjustments, findRowByItem, setItemSyncError]);
 
+  // ===== Replenishment slice =====
+  // Applies an approved replenishment plan from ReplenishmentPreview: each
+  // input row gets purchased=deliveryDate + out_of_stock=false. Optimistic
+  // local update on both `pantry` and `outOfStock`, single batch PATCH via
+  // PostgREST `?id=in.(...)`, rollback on failure. Throws on error so the
+  // preview component can keep `busy=false` and let the user retry.
+  const applyReplenishment = useCallback(async (rows, deliveryDate) => {
+    if (!rows || rows.length === 0) return;
+    const ids = rows.map(r => r.id);
+    const idSet = new Set(ids);
+    const itemSet = new Set(rows.map(r => r.item));
+
+    // Snapshot prior state for rollback.
+    const priorPantry = new Map();
+    for (const p of pantry) {
+      if (idSet.has(p.id)) {
+        priorPantry.set(p.id, { purchased: p.purchased, _out_of_stock: p._out_of_stock });
+      }
+    }
+    const priorOos = new Set();
+    for (const name of outOfStock) {
+      if (itemSet.has(name)) priorOos.add(name);
+    }
+
+    // Optimistic local update.
+    setPantry(prev => prev.map(p =>
+      idSet.has(p.id) ? { ...p, purchased: deliveryDate, _out_of_stock: false } : p
+    ));
+    setOutOfStock(prev => {
+      const next = new Set(prev);
+      for (const name of itemSet) next.delete(name);
+      return next;
+    });
+
+    try {
+      await batchPatchPantryRows(ids, { purchased: deliveryDate, out_of_stock: false });
+    } catch (err) {
+      console.error("Failed to apply replenishment:", err);
+      // Rollback.
+      setPantry(prev => prev.map(p => {
+        const prior = priorPantry.get(p.id);
+        return prior ? { ...p, purchased: prior.purchased, _out_of_stock: prior._out_of_stock } : p;
+      }));
+      setOutOfStock(prev => {
+        const next = new Set(prev);
+        for (const name of priorOos) next.add(name);
+        return next;
+      });
+      throw err;
+    }
+  }, [pantry, outOfStock]);
+
   // ===== Cooked-log mutation slice (step 7i) =====
   // Verbatim port of canonical L5567 (setCookedSyncError) + L5584
   // (addCooked). Mirrors the pantry sync slice's optimistic-write +
@@ -632,7 +685,7 @@ function AppInner() {
       pantry={pantry}
       outOfStock={outOfStock}
     />}
-    {tab === "tesco" && <OrdersView pantry={pantry} />}
+    {tab === "tesco" && <OrdersView pantry={pantry} applyReplenishment={applyReplenishment} />}
     {tab === "audit" && <AuditView
       pantry={pantry}
       cooked={cooked}

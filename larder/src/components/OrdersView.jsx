@@ -38,7 +38,7 @@ import { lookupSku } from "../lib/tesco-skus.js";
 import { useReceipts } from "../contexts/ReceiptsContext.jsx";
 import { useTescoSkus } from "../contexts/TescoSkusContext.jsx";
 
-export default function OrdersView({pantry}){
+export default function OrdersView({pantry, applyReplenishment}){
   // Receipts now come from Supabase via ReceiptsContext (commit 14.3).
   // The shape matches what RAW.tesco_orders used to provide — items[]
   // with name/section/status/total_price_gbp — so all downstream logic
@@ -216,7 +216,7 @@ export default function OrdersView({pantry}){
       <div className="card p-6 text-sm text-stone-500 text-center">
         No order history loaded yet. Receipts come from Supabase; if this persists, check the network tab.
       </div>
-      <ReceiptParser/>
+      <ReceiptParser pantry={pantry} applyReplenishment={applyReplenishment}/>
     </div>;
   }
 
@@ -233,7 +233,7 @@ export default function OrdersView({pantry}){
       <KV label="Unavailable" value={stats.totalUnavail} sub="Ordered, not delivered"/>
     </div>
 
-    <ReceiptParser/>
+    <ReceiptParser pantry={pantry} applyReplenishment={applyReplenishment}/>
 
     <Section title="Spend over time" subtitle="Order totals, oldest → newest" tone="info"
       tip="Each bar is one delivery. Useful for spotting big top-up shops vs. regular weekly shops.">
