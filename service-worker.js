@@ -1,42 +1,20 @@
-const CACHE_NAME = 'grocery-app-v2';
-const ASSETS = [
-  './',
-  './index.html',
-  './manifest.json',
-  './icon-192.png',
-  './icon-512.png',
-  './apple-touch-icon.png'
-];
+// Kill-switch service worker.
+// Clears all caches from earlier versions and unregisters itself so the next
+// navigation fetches everything fresh from the network. The new Vite build
+// (post-cutover) does not register a service worker; this file exists only
+// to clean up after installed clients that still have the legacy SW.
 
-self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS))
-  );
+self.addEventListener('install', () => {
   self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(
-        keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))
-      )
-    )
+    Promise.all([
+      caches.keys().then((keys) => Promise.all(keys.map((k) => caches.delete(k)))),
+      self.registration.unregister(),
+    ]).then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
-self.addEventListener('fetch', (event) => {
-  if (event.request.method !== 'GET') return;
-  event.respondWith(
-    caches.match(event.request).then((cached) => {
-      return cached || fetch(event.request).then((response) => {
-        if (response.status === 200) {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-        }
-        return response;
-      }).catch(() => cached);
-    })
-  );
-});
+// No fetch handler — let the browser hit the network directly.
