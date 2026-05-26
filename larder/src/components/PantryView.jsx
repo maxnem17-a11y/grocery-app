@@ -27,7 +27,7 @@
 // ============================================================
 
 import { useMemo, useState } from "react";
-import { decayed, daysUntilExpiry, formatDate } from "../lib/pantry-math.js";
+import { daysSince, daysUntilExpiry, decayed, formatDate } from "../lib/pantry-math.js";
 import { lc } from "../lib/text.js";
 import { Bar, Chip, InfoTip, SortHeader, Stat } from "./primitives.jsx";
 
@@ -51,7 +51,7 @@ export default function PantryView({pantry, outOfStock, toggleOutOfStock, inFree
   //   expires → asc (soonest first — what to use up)
   //   khalil → asc (son_allergen=0 first — most flagged surfaced)
   // Out-of-stock rows are always sunk to the bottom regardless of sort direction.
-  const PANTRY_DEFAULT_DIR = { item:"asc", category:"asc", qty:"asc", conf:"asc", expires:"asc", khalil:"asc" };
+  const PANTRY_DEFAULT_DIR = { item:"asc", category:"asc", qty:"asc", conf:"asc", expires:"asc", purchased:"desc", khalil:"asc" };
   const [sortBy, setSortBy] = useState("expires");
   const [sortDir, setSortDir] = useState("asc");
   const toggleSort = (key) => {
@@ -124,6 +124,14 @@ export default function PantryView({pantry, outOfStock, toggleOutOfStock, inFree
           else if (a._dExp === null) cmp = 1;
           else if (b._dExp === null) cmp = -1;
           else cmp = a._dExp - b._dExp;
+          break;
+        case "purchased":
+          // Null purchased (never ordered) sinks to the bottom of asc, top of desc.
+          // Compare ISO date strings directly — lexicographic order matches chronological.
+          if (!a.purchased && !b.purchased) cmp = 0;
+          else if (!a.purchased) cmp = 1;
+          else if (!b.purchased) cmp = -1;
+          else cmp = a.purchased.localeCompare(b.purchased);
           break;
         case "khalil": cmp = allergenOrd(a._flag) - allergenOrd(b._flag); break;
         default: cmp = 0;
@@ -199,10 +207,11 @@ export default function PantryView({pantry, outOfStock, toggleOutOfStock, inFree
       <div className="grid grid-cols-12 gap-2 text-xs text-stone-500 uppercase tracking-wider px-4 py-2 border-b border-stone-200 bg-stone-50">
         <SortHeader colSpan={3} sortKey="item" sortBy={sortBy} sortDir={sortDir} onClick={toggleSort}>Item</SortHeader>
         <SortHeader colSpan={1} sortKey="category" sortBy={sortBy} sortDir={sortDir} onClick={toggleSort}>Category</SortHeader>
-        <SortHeader colSpan={3} sortKey="qty" sortBy={sortBy} sortDir={sortDir} onClick={toggleSort} align="center">Qty</SortHeader>
+        <SortHeader colSpan={2} sortKey="qty" sortBy={sortBy} sortDir={sortDir} onClick={toggleSort} align="center">Qty</SortHeader>
         <SortHeader colSpan={2} sortKey="conf" sortBy={sortBy} sortDir={sortDir} onClick={toggleSort}>
           Freshness <InfoTip align="below">How likely the item is still usable. Starts at ~95% on purchase day and decays automatically by category. Anything below 30% is flagged 'low'.</InfoTip>
         </SortHeader>
+        <SortHeader colSpan={1} sortKey="purchased" sortBy={sortBy} sortDir={sortDir} onClick={toggleSort}>Last ordered</SortHeader>
         <SortHeader colSpan={1} sortKey="expires" sortBy={sortBy} sortDir={sortDir} onClick={toggleSort}>Expires</SortHeader>
         <SortHeader colSpan={1} sortKey="khalil" sortBy={sortBy} sortDir={sortDir} onClick={toggleSort} align="center">
           Khalil <InfoTip align="below-right">⚠️ = contains a Khalil allergen · ? = depends on the brand/label · ✓ = safe.</InfoTip>
@@ -216,12 +225,20 @@ export default function PantryView({pantry, outOfStock, toggleOutOfStock, inFree
               <span className="truncate">{r.item}</span>
             </div>
             <div className="col-span-1 text-stone-500 text-xs truncate" title={r.category}>{r.category}</div>
-            <div className="col-span-3 text-center mono text-xs flex items-center justify-center gap-1">
+            <div className="col-span-2 text-center mono text-xs flex items-center justify-center gap-1">
               <button onClick={()=>adjustQty(r.item, -1)} disabled={r._out} className="qty-btn" title="Decrement qty (used one)">−</button>
               <span className="min-w-[55px] inline-block">{renderQty(r.qty, r._delta)}</span>
               <button onClick={()=>adjustQty(r.item, +1)} disabled={r._out} className="qty-btn" title="Increment qty (bought more)">+</button>
             </div>
             <div className="col-span-2"><Bar pct={r._conf}/><div className="mono text-[10px] text-stone-500 mt-0.5">{r._conf}%</div></div>
+            <div className="col-span-1 text-xs leading-tight" title={r.purchased ? `bought ${formatDate(r.purchased)}` : "no purchase date on file"}>
+              {r.purchased
+                ? <>
+                    <div className="text-stone-700">{formatDate(r.purchased)}</div>
+                    <div className="text-stone-400 mono text-[10px]">{daysSince(r.purchased)}d ago</div>
+                  </>
+                : <span className="text-stone-400">—</span>}
+            </div>
             <div className="col-span-1 text-xs leading-tight" title={r.expires ? `expires ${formatDate(r.expires)}` : ""}>
               {r._dExp===null ? <span className="text-stone-400">—</span>
                 : r._dExp <= 0 ? <>
