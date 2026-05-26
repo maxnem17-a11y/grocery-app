@@ -1,6 +1,6 @@
 # Larder — Project Context for Claude Code
 
-Household grocery intelligence dashboard. **The Vite app reached canonical feature parity post-7k** (all 6 tabs ported, all helpers extracted, all writes wired). The old single-file `index.html` at the git root remains the live PWA; cutover to the Vite build (and decommissioning the canonical) is a separate deploy step outside the migration's scope.
+Household grocery intelligence dashboard. **Cutover complete (2026-05-26):** the Vite build at `larder/dist/` is now the live PWA at `https://maxnem17-a11y.github.io/grocery-app/`, deployed via GitHub Actions (`.github/workflows/deploy.yml`). The previous canonical single-file `index.html` (~414KB) is archived under `legacy/` at the git root.
 
 ---
 
@@ -17,12 +17,15 @@ Household grocery intelligence dashboard. **The Vite app reached canonical featu
 
 ```
 grocery-app/                ← git root
-├── index.html              ← canonical / live PWA (~414KB). Source of truth until Vite ships.
-├── manifest.json           ← PWA manifest
-├── service-worker.js       ← PWA service worker
-├── icons/                  ← PWA icons (canonical PNGs; copied selectively into larder/public/icons/)
+├── .github/workflows/
+│   └── deploy.yml          ← Pages-via-Actions: build on PR + push-to-main, deploy on push-to-main (Cutover-2)
+├── legacy/                 ← archived canonical (Cutover-3); not deployed
+│   ├── index.html          ← previous live PWA (~414KB); rollback reference
+│   ├── manifest.json
+│   └── service-worker.js   ← kill-switch (Cutover-1); same content also served from larder/public/
+├── icons/                  ← original brand PNGs (legacy reference; larder/public/icons/ is the deployed copy)
 ├── README.md
-└── larder/                 ← Vite migration target
+└── larder/                 ← Vite app (now the deployed PWA)
     ├── CREDENTIALS.md      ← Supabase keys. Gitignored. Don't commit.
     ├── KNOWN_ISSUES.md     ← pre-existing bugs documented, not regressions
     ├── CLAUDE.md           ← this file
@@ -30,7 +33,9 @@ grocery-app/                ← git root
     ├── package.json
     ├── vite.config.js
     ├── public/
-    │   └── icons/          ← all 6 brand icons (modern + retro × 192/512/apple-touch); favicon swap wired post-7f-followup
+    │   ├── icons/          ← all 6 brand icons (modern + retro × 192/512/apple-touch); favicon swap wired post-7f-followup
+    │   ├── manifest.json   ← PWA manifest, deployed at /grocery-app/manifest.json (Cutover-2)
+    │   └── service-worker.js ← kill-switch for legacy installed clients (Cutover-3)
     └── src/
         ├── main.jsx
         ├── App.jsx                ← app shell: 3 Provider wrap + boot fetch + brand chrome + clickable tab strip + pantry sync slice
@@ -115,7 +120,7 @@ See `KNOWN_ISSUES.md`. The almond-milk → tree-nut classification gap is intent
 ## Current state
 
 **Last verified:** 2026-05-26
-**Last commit:** `804447b` — Step 7k (OrdersView + ReceiptParser + SpendChart + receipt-parse lib; Orders tab complete; **6 of 6 canonical tabs at parity**).
+**Last commit:** `HEAD` — Cutover-3 (archive canonical to `legacy/`, persist kill-switch SW in Vite build). **Cutover complete:** Vite build is live at https://maxnem17-a11y.github.io/grocery-app/ via Pages-via-Actions.
 **App shell:** `src/App.jsx` wraps the tree in `<ReceiptsProvider>` + `<AllergensProvider>` + `<RecipesProvider>` (recipes state + updateRecipePage owned by RecipesContext post-7g/7h), runs the pantry + cooked boot fetch, owns the pantry sync slice + cooked-log mutation slice (`addCooked` / `cookedSyncErrors`), holds App-scope `eaterFilter` state for RecipesView, mounts `<LarderBrand>` + a clickable tab strip with `<TabIcon>` glyphs + `<LarderFooter>` around the active view. Default tab is `"planner"` (canonical-faithful). Tab state is in-memory only.
 **Smoke test:** ⚠ Browser smoke-test skipped in 7i per user direction (workflow change: "no need to wait for OK if confident"); correctness verified via static analysis + build green at 49 modules. Static review confirmed hook ordering, useMemo deps, addCooked closure semantics, page-edit input wires updateRecipePage via useRecipes(), and TabIcon "recipes" kind already implemented in 7f-3.
 
@@ -436,19 +441,24 @@ Smoke tests:
 - **Canonical parity: PASSED.** Both icons render identically to canonical PWA's Stats tab at 16px.
 - **No regressions: PASSED.** Tab clicking, view switching, LarderBrand/Footer all intact.
 
+#### Cutover (Completed 2026-05-26)
+
+Vite build is live at https://maxnem17-a11y.github.io/grocery-app/ via Pages-via-Actions.
+
+- **Cutover-1** (`0c44dc7`): replace `grocery-app/service-worker.js` with a self-unregister kill-switch. Pushed direct to main so installed clients begin clearing the legacy SW before the build-mechanism flip.
+- **Cutover-2** (`35db697` merge of `f7bca07`): feature branch + PR (F1). Adds `base: '/grocery-app/'` to vite.config; co-locates `manifest.json` in `larder/public/` with fixed icon paths (canonical referenced non-existent `icon-{192,512}.png` at repo root); adds `<link rel="manifest">` + theme-color to `larder/index.html`; introduces `.github/workflows/deploy.yml` (Pages-via-Actions: build on PR + push-to-main, deploy only on push-to-main). Requires Pages source flipped from "Deploy from branch" to "GitHub Actions" in repo settings (one-time, user-side).
+- **Cutover-3** (this commit): `git mv` canonical `{index.html, manifest.json, service-worker.js}` into `legacy/` at the git root (D2 — preserved as git rollback reference, not URL-served). Also adds `larder/public/service-worker.js` (same kill-switch content) so the live `/grocery-app/service-worker.js` URL stays 200 — installed clients that hadn't visited between Cutover-1 and Cutover-2 can still pick up the kill-switch and self-unregister on their next navigation. Without that, their stale SW would keep serving cached canonical from disk indefinitely.
+
+Live smoke (post-merge): `curl -sI` against `/`, `/assets/index-<hash>.js`, and `/manifest.json` all return 200 with expected content-types and the new manifest's icon paths.
+
+Rollback: restore `legacy/index.html` → repo root, change Pages source back to "Deploy from branch", push. Two-step revert.
+
 ### Next
 
 #### 7d-followup — verify `qty_adjustment` debounce coalescing
 
 Confirm that rapid clicks on the qty +/− buttons within a 150ms window produce a single coalesced PATCH (not one-per-click). Test approach: pin App in React DevTools, watch hooks 15 (`qtyDebounceTimers`) and 16 (`pendingQtyValues`); fire 5+ clicks programmatically via `$r` or a console snippet to guarantee sub-150ms cadence; expect one PATCH with cumulative value. Server-write correctness already proven in 7d. Pure optimisation verification.
 
-#### Cutover / deploy (post-migration)
-
-The Vite app at `larder/` is at canonical parity and `npm run build` produces a static bundle. The remaining work — outside the migration arc itself — is deploying that bundle in place of the canonical single-file `index.html`. Touch points:
-- GitHub Pages currently serves `grocery-app/index.html`; cutover means pointing the static-host root at `larder/dist/` (after `npm run build`).
-- Verify the PWA manifest path + service worker still resolve in the new layout.
-- Decide whether to keep the canonical `index.html` as a one-version-behind fallback or delete it outright.
-- Run live smoke against Supabase before flipping DNS / Pages config.
 
 ### Deferred
 
