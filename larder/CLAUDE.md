@@ -503,6 +503,16 @@ Confirm that rapid clicks on the qty +/− buttons within a 150ms window produce
 
 **Canonical legacy URL.** `grocery-app/legacy/` is git-archived but not URL-served (D2-lite). If a fallback URL ever becomes useful, copy into `larder/public/legacy/` + add icon subfolder so the canonical's relative favicon hrefs resolve. Probably not needed.
 
+#### Product backlog (PM-identified 2026-05-28)
+
+**#1 — Allergen re-verification trail (highest household stakes).** `pantry_items.allergen_flag` has no record of *when* or *whether* someone last checked the label against Khalil's allergens. Products change formulation; Tesco subs swap brands. Add `allergen_verified_at` + `verified_by` columns and prompt "re-verify?" when a receipt brings in a substitution or a new SKU for an existing pantry row. Schema change + a verify-action UI on PantryView's Khalil audit panel.
+
+**#2 — Khalil-allergen alert escalation post-save.** ReceiptParser flags allergen items in the parse preview, but once saved there's no persistent surface saying "your last order included N items Khalil can't eat — here's where they are." Add a banner on PantryView first paint (or a Stats card) that reads the latest order's `ordersKhalilFlag` hits. Pairs with #1.
+
+**#4 — Auto-decrement on `mark cooked` (SCOPED 2026-05-28).** When a recipe is marked cooked, debit matched pantry rows' `qty_adjustment` so the pantry reflects usage. Decisions: **A1** (decrement by 1 per matched ingredient — skip quantity/unit math), **C1** (reverse the decrement on un-cook, symmetric), **D2** (non-blocking toast with Undo, not silent — matcher imprecision needs a veto). Matching reuses the replenishment matcher (PANTRY_KEYWORDS + token-subset). **Precondition: verify `recipes.ingredients` shape in Supabase** — free-text vs structured array changes the matcher input. Files: `lib/replenishment.js` (sister `computeRecipeUsage`), `App.jsx addCooked` (+batch PATCH + rollback), new `UndoToast.jsx`. ~150-200 lines. Pairs well after a meal-planner so planned→cooked→pantry closes the loop.
+
+**#6 — Tesco order email auto-ingest (SCOPED 2026-05-28; needs laptop for setup).** Google Apps Script bound to Max's Gmail, 15-min trigger, searches `label:Larder/Inbox is:unread`, POSTs raw .eml to the existing `ingest-receipt` Edge Function. Decisions: **A1** (Apps Script, not Cloudflare/Resend — lowest setup friction), **B1** (auto-ingest only; replenishment stays manual via the deferred Replenish-from-OrdersView button — ship that alongside), **C1** (add `source = "auto-gmail"`; one-line Edge Function change), **D1** (label `Larder/Failed` on error, leave unread). The Edge Function side is already built (eml ingest + dedup). **Blocker for autonomous execution:** the Apps Script project, Gmail filter, OAuth consent, and trigger all require Max logged into Google in a browser (~5 min UI). Code-side parts (Edge Function tweak, `apps-script/Code.gs` + README in repo, OrdersView button) are doable without the laptop. Full scope in the 2026-05-28 chat session.
+
 ### Update protocol
 At the end of each session, update the "Current state" section above:
 - Bump "Last verified" date and "Last commit" hash.
