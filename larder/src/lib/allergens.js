@@ -170,11 +170,16 @@ export function khalilAllergenFlag(name, allergens) {
   const looksDairyExempt = dairyExceptions.some((p) => n.includes(p));
 
   // Categories are checked in priority order — wheat before legumes (so
-  // "kidney bean pasta" still gets flagged), dairy before tree-nuts (so
-  // "almond milk" lands as dairy, which is the right answer for Khalil),
-  // etc. Preserve the original audit ordering.
+  // "kidney bean pasta" still gets flagged), dairy before tree-nuts so
+  // cow's milk doesn't fall through, etc. Preserve the original audit
+  // ordering.
   const order = ["wheat", "dairy", "eggs", "beef", "tree_nuts", "legumes", "avocado"];
   for (const cat of order) {
+    // The dairy token list intentionally has no bare "milk" entry (it
+    // would over-flag plant milks). Use isDairyMilk() so plain "whole
+    // milk" gets caught while "almond milk" / "oat milk" fall through
+    // to their real category (tree nut / household-safe).
+    if (cat === "dairy" && !looksDairyExempt && isDairyMilk(n)) return "dairy";
     const tokens = cats[cat] || [];
     for (const tok of tokens) {
       if (!hasToken(n, tok)) continue;
