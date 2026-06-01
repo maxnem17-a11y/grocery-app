@@ -119,9 +119,10 @@
          Targets the visual primitives (.card / .pill / .navtab / .qty-btn /
          .chip / .bar) — utility-classed inline styles in components are left
          alone, so layout/spacing stays identical to modern mode. */
-      [data-brand-style="retro"] {
-        font-family: 'VT323', ui-monospace, monospace;
-      }
+      /* Target body explicitly, not just the html ancestor — the existing
+         `body { font-family: ui-sans-serif... }` rule above wins over
+         inheritance from <html data-brand-style="retro"> otherwise. */
+      [data-brand-style="retro"] body,
       [data-brand-style="retro"] .mono,
       [data-brand-style="retro"] textarea {
         font-family: 'VT323', ui-monospace, monospace;
