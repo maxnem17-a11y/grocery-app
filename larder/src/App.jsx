@@ -119,16 +119,17 @@ function AppInner() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
 
-  // Tab state. Default to Planner (canonical-faithful, decision D2 in
-  // 7g). New views grow the `tabs` array. Order matches canonical
-  // L5555–5562 — planner / pantry / audit (with gaps + tesco + recipes
-  // pending future ports).
+  // Tab state. Default to Planner (decision D2 in 7g). Order promotes
+  // Basket to position 2 — it's the second most actionable surface
+  // after "what to cook tonight" and was previously buried at #4.
+  // Diverges from canonical L5555–5562 (post-cutover, canonical
+  // fidelity is no longer load-bearing).
   const [tab, setTab] = useState("planner");
   const tabs = [
     ["planner", "Cook", "What to cook this week, grouped by what's expiring, what's whole-household-safe, and what's high-protein."],
+    ["gaps", "Basket", "Your next shop — likely gaps plus the leverage picks that unlock the most recipes. Items you buy regularly that are missing from both your latest order and the pantry are candidates for the basket."],
     ["recipes", "Recipes", "Search and filter every recipe in your library. Sort by makeability, protein, or prep time."],
     ["pantry", "Pantry", "Everything currently in the kitchen, with expiry and confidence tracking. Mark items out of stock if you've used them up."],
-    ["gaps", "Basket", "Your next shop — likely gaps plus the leverage picks that unlock the most recipes. Items you buy regularly that are missing from both your latest order and the pantry are candidates for the basket."],
     ["tesco", "Orders", "Past Tesco deliveries — spend trends, repeat purchases, substitutions, and Khalil allergen exposure. Read-only."],
     ["audit", "Stats", ""],
   ];
