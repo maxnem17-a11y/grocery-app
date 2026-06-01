@@ -115,15 +115,15 @@ Canonical allergen config: `household_allergens` table in Supabase, surfaced thr
 
 ## Known issues (don't "fix" by accident)
 
-See `KNOWN_ISSUES.md`. The almond-milk → tree-nut classification gap is intentional / documented, not a regression.
+See `KNOWN_ISSUES.md`. `"almond milk"` → `"tree nut"` is intentional (almond is Khalil's tree-nut trigger); don't "fix" it to `"dairy"`. The adjacent gap — plain `"whole milk"` returning `null` — was fixed 2026-06-01 (`a42047d`).
 
 ---
 
 ## Current state
 
-**Last verified:** 2026-05-26
-**Last commit:** `f32137c` — post-cutover refinement: applyReplenishment bumps `expires` from category SHELF_LIFE_DAYS so just-replenished perishables don't show as overdue. Live at https://maxnem17-a11y.github.io/grocery-app/.
-**App shell:** `src/App.jsx` wraps the tree in `<ReceiptsProvider>` + `<AllergensProvider>` + `<RecipesProvider>` (recipes state + updateRecipePage owned by RecipesContext post-7g/7h), runs the pantry + cooked boot fetch, owns the pantry sync slice + cooked-log mutation slice (`addCooked` / `cookedSyncErrors`), holds App-scope `eaterFilter` state for RecipesView, mounts `<LarderBrand>` + a clickable tab strip with `<TabIcon>` glyphs + `<LarderFooter>` around the active view. Default tab is `"planner"` (canonical-faithful). Tab state is in-memory only.
+**Last verified:** 2026-06-01
+**Last commit:** `0d03199` — Basket promoted to tab position 2 (`Cook / Basket / Recipes / Pantry / Orders / Stats`); previous `a42047d` fixes `khalilAllergenFlag` to catch plain cow milk via `isDairyMilk`. Live at https://maxnem17-a11y.github.io/grocery-app/.
+**App shell:** `src/App.jsx` wraps the tree in `<ReceiptsProvider>` + `<AllergensProvider>` + `<RecipesProvider>` (recipes state + updateRecipePage owned by RecipesContext post-7g/7h), runs the pantry + cooked boot fetch, owns the pantry sync slice + cooked-log mutation slice (`addCooked` / `cookedSyncErrors`), holds App-scope `eaterFilter` state for RecipesView, mounts `<LarderBrand>` + a clickable tab strip with `<TabIcon>` glyphs + `<LarderFooter>` around the active view. Default tab is `"planner"`. Tab order diverges from canonical (Basket promoted to #2 on 2026-06-01). Tab state is in-memory only.
 **Smoke test:** ⚠ Browser smoke-test skipped in 7i per user direction (workflow change: "no need to wait for OK if confident"); correctness verified via static analysis + build green at 49 modules. Static review confirmed hook ordering, useMemo deps, addCooked closure semantics, page-edit input wires updateRecipePage via useRecipes(), and TabIcon "recipes" kind already implemented in 7f-3.
 
 ### Completed
@@ -483,6 +483,12 @@ Static-trace eyeball before shipping: 40 receipt items → ~22 auto-matches (16 
 - `applyReplenishment`: per-row new expires from category shelf life, grouped by computed date so each group gets one PostgREST batch PATCH (3–5 round-trips instead of N). Optimistic local update + rollback cover expires too.
 - One-off backfill UPDATE via MCP for stale rows globally (`(expires IS NULL OR purchased > expires) AND category IN (...)`). 9 rows fixed: protein → +4d, produce → +5d, bread → +5d, dairy-alt → +7d.
 - Always-overwrite for simplicity. Tesco receipts don't include use-by dates, and there's no per-item expires edit UI, so there are no hand-curated values at risk today. Guard rail ("only-if-stale") deferred — add when/if a use-by edit workflow lands.
+
+#### Post-cutover refinements (Completed 2026-06-01)
+
+**`khalilAllergenFlag` catches plain cow milk** (`a42047d`). Latent bug: `household_allergens` dairy/khalil/block has 18 cheese/butter/cream tokens but no bare `"milk"` entry (would over-flag plant milks). Receipt items like `"Tesco Whole Milk 2L"` were returning `null` instead of `"dairy"`. Fix: call existing `isDairyMilk(n)` helper inside the dairy branch of the category loop in `lib/allergens.js`. `isDairyMilk` already handles plant-milk exclusions (coconut/almond/oat/soya/etc.), so `"almond milk"` still flows to `tree_nuts` and `"oat milk"` still returns `null` (household-safe). 8-line change; no tests existed to update. Note: `flagsForRecipe` already called `isDairyMilk` (allergens.js:98) — this is consistency with the existing recipe-side behaviour.
+
+**Basket promoted to tab position 2** (`0d03199`). Tab order was `Cook / Recipes / Pantry / Basket / Orders / Stats` (canonical-faithful). Basket is the second most actionable surface after Cook (what to eat tonight) and was buried at #4 behind two reference tabs. New order: `Cook / Basket / Recipes / Pantry / Orders / Stats` — strict swap of Basket and Recipes positions in `App.jsx:127`. The render strip iterates the `tabs` array; route guards (`tab === "..."`) are keyed so nothing else needed touching. Diverges from canonical L5555–5562; post-cutover, canonical fidelity is no longer load-bearing.
 
 ### Next
 
