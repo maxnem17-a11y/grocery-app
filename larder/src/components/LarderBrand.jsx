@@ -42,6 +42,10 @@ export default function LarderBrand({ pantry, nextDelivery, showHelpBanner, setS
   // in larder/public/icons/ — see canonical L19-21 for the link shape).
   useEffect(() => {
     try { localStorage.setItem("larder-brand-style", style); } catch {}
+    // Mirror to <html data-brand-style="..."> so CSS in index.html can scope
+    // retro-only rules. The inline boot script in index.html sets this before
+    // first paint; this effect keeps it in sync when the user toggles.
+    try { document.documentElement.dataset.brandStyle = style; } catch {}
     const t = document.getElementById("favicon-touch");
     const i192 = document.getElementById("favicon-192");
     const i512 = document.getElementById("favicon-512");

@@ -13,6 +13,21 @@
     <link id="favicon-512" rel="icon" type="image/png" sizes="512x512" href="icons/larder-modern-512.png">
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1c1c1c">
+    <!-- VT323 — chunky 8-bit terminal font, only applied when retro brand
+         style is active (see [data-brand-style="retro"] rules below). -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=VT323&display=swap">
+    <!-- Sync the saved brand style to <html data-brand-style="..."> before
+         first paint, so the boot/loading screen renders in the correct
+         style instead of flashing modern then re-painting. LarderBrand keeps
+         this attribute in sync after mount. -->
+    <script>
+      try {
+        document.documentElement.dataset.brandStyle =
+          localStorage.getItem('larder-brand-style') || 'modern';
+      } catch (e) {}
+    </script>
     <!-- Tailwind utility classes are used throughout src/components — load the
          JIT CDN that canonical used (legacy/index.html L26). Dev-mode per
          Tailwind docs, but works in production for a small PWA like this.
@@ -96,6 +111,82 @@
       .legend-strip .lkey{ display:inline-flex; align-items:center; gap:.3rem; margin-right:.9rem; white-space:nowrap; }
       .legend-strip .lkey .sw{ width:8px; height:8px; border-radius:2px; display:inline-block; }
       .tab-subtitle{ font-size:.75rem; color:#6b7280; margin-top:1.25rem; margin-bottom:1rem; line-height:1.4; padding:0 .25rem; }
+
+      /* === Retro brand-style overrides (2026-06-01) ============================
+         LarderBrand mirrors localStorage["larder-brand-style"] to
+         <html data-brand-style="...">. Modern is the default and unaffected;
+         these rules only fire when the user picks "retro" in the toggle.
+         Targets the visual primitives (.card / .pill / .navtab / .qty-btn /
+         .chip / .bar) — utility-classed inline styles in components are left
+         alone, so layout/spacing stays identical to modern mode. */
+      [data-brand-style="retro"] {
+        font-family: 'VT323', ui-monospace, monospace;
+      }
+      [data-brand-style="retro"] .mono,
+      [data-brand-style="retro"] textarea {
+        font-family: 'VT323', ui-monospace, monospace;
+      }
+      [data-brand-style="retro"] .card {
+        border-radius: 0;
+        border-width: 2px;
+        border-color: #1c1c1c;
+        box-shadow: 4px 4px 0 #1c1c1c;
+      }
+      [data-brand-style="retro"] .pill {
+        border-radius: 0;
+        border-width: 2px;
+        border-color: #1c1c1c;
+        box-shadow: 2px 2px 0 #1c1c1c;
+      }
+      [data-brand-style="retro"] .pill:hover {
+        transform: translate(1px, 1px);
+        box-shadow: 1px 1px 0 #1c1c1c;
+      }
+      [data-brand-style="retro"] .pill[data-active="true"] {
+        box-shadow: inset 2px 2px 0 rgba(255,255,255,.15);
+      }
+      [data-brand-style="retro"] .qty-btn {
+        border-radius: 0;
+        border-width: 2px;
+        border-color: #1c1c1c;
+      }
+      [data-brand-style="retro"] .chip {
+        border-radius: 0;
+        border-width: 2px;
+        border-color: #1c1c1c;
+      }
+      [data-brand-style="retro"] .navtab {
+        border-bottom-width: 3px;
+      }
+      [data-brand-style="retro"] .navtab[data-active="true"] {
+        border-bottom-style: double;
+        border-bottom-width: 4px;
+      }
+      [data-brand-style="retro"] .bar,
+      [data-brand-style="retro"] .bar > div {
+        border-radius: 0;
+      }
+      [data-brand-style="retro"] .help-banner {
+        border-width: 2px;
+        border-color: #1c1c1c;
+        border-radius: 0;
+        box-shadow: 4px 4px 0 #1c1c1c;
+      }
+      [data-brand-style="retro"] .infotip-trigger {
+        border-radius: 0;
+      }
+      [data-brand-style="retro"] .infotip-bubble {
+        border-radius: 0;
+        border: 2px solid #1c1c1c;
+      }
+      /* Crisp the retro jar PNG (image-rendering: pixelated keeps blocky
+         scaling instead of bilinear blur). Targets the retro asset only so
+         no other img/svg in the app — e.g. SpendChart — is affected. */
+      [data-brand-style="retro"] img[src*="larder-retro"] {
+        image-rendering: pixelated;
+        image-rendering: -moz-crisp-edges;
+        image-rendering: crisp-edges;
+      }
     </style>
   </head>
   <body>
