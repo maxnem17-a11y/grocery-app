@@ -273,6 +273,7 @@ export function mapRecipeRow(row) {
     makeable_pct: null,
     notes: row.notes,
     steps: row.steps || [],
+    prep_steps: row.prep_steps || [],
     _source_file: deriveSourceFile(row),
   };
 }

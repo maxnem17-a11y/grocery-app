@@ -124,3 +124,41 @@ export function leverageScore(recipes, matchSet, limit) {
   out.sort((a, b) => b.recipeCount - a.recipeCount || b.avgBoost - a.avgBoost);
   return limit ? out.slice(0, limit) : out;
 }
+
+// extractPrepTasks — backlog #9 ("Got 5 mins?" prep-ahead suggestions).
+//
+// Collects mise-en-place prep tasks from recipes the household can
+// currently make, and returns a uniform random sample of `count` tasks.
+//
+// "Cookable" = makeability pct >= PREP_COOKABLE_PCT (70, matching the
+// leverageScore "already makeable" cutoff above). Each cookable recipe
+// contributes its `prep_steps[]` entries (plain strings); we flatten them
+// with a back-pointer to the parent recipe so the UI can show what each
+// task is for. Returns up to `count` tasks sampled uniformly at random
+// (partial Fisher-Yates). Empty array when no cookable recipe has any
+// prep_steps — the Cook-tab section hides itself in that case.
+//
+// `outOfStock` is the Set of item names flagged out; it's passed through
+// to pantryMatchSet so out-of-stock items don't count toward makeability.
+export const PREP_COOKABLE_PCT = 70;
+
+export function extractPrepTasks(recipes, pantry, outOfStock, count = 5) {
+  const matchSet = pantryMatchSet(pantry, outOfStock);
+  const pool = [];
+  for (const r of recipes) {
+    const steps = Array.isArray(r.prep_steps) ? r.prep_steps : [];
+    if (!steps.length) continue;
+    if (makeability(r, matchSet).pct < PREP_COOKABLE_PCT) continue;
+    for (const s of steps) {
+      const task = typeof s === "string" ? s.trim() : "";
+      if (task) pool.push({ task, recipeId: r.id, recipeName: r.name });
+    }
+  }
+  // Partial Fisher-Yates: shuffle just the first `count` positions.
+  const n = Math.min(count, pool.length);
+  for (let i = 0; i < n; i++) {
+    const j = i + Math.floor(Math.random() * (pool.length - i));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  return pool.slice(0, count);
+}

@@ -36,6 +36,7 @@
 import { useMemo } from "react";
 import { Chip, Section } from "./primitives.jsx";
 import RecipeMicroList from "./RecipeMicroList.jsx";
+import PrepSuggestions from "./PrepSuggestions.jsx";
 import { daysUntilExpiry, formatDate } from "../lib/pantry-math.js";
 import { lc } from "../lib/text.js";
 import { audienceFromFlags, flagsForRecipe } from "../lib/allergens.js";
@@ -92,6 +93,7 @@ export default function PlannerView({pantry, outOfStock, cooked}){
       tip="Fast meals (prep + cook ≤25 min) where you already have at least half the ingredients. Good for weeknight 'what can I make tonight'.">
       <RecipeMicroList items={quickMakeable}/>
     </Section>
+    <PrepSuggestions recipes={recipes} pantry={pantry} outOfStock={outOfStock}/>
     {cooked.length > 0 && <Section title={`Cooked log · ${cooked.length}`} tone="neutral" subtitle="Saved to local storage on this device" collapsible defaultOpen={false}
       tip="Recipes you've marked cooked via the Recipes tab. This log lives only in this browser — paste it into a Claude session so it can update your canonical pantry quantities.">
       <ul className="text-sm space-y-1">
