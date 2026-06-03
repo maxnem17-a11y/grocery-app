@@ -127,36 +127,37 @@ export function leverageScore(recipes, matchSet, limit) {
 
 // extractPrepGroups — backlog #9 ("Got 5 mins?" prep-ahead suggestions).
 //
-// Collects mise-en-place prep tasks from recipes the household can
-// currently make, grouped by recipe: returns an array of
-// `{ recipeId, recipeName, tasks: string[] }` in random order. Grouping
-// (rather than a flat task sample) lets the Cook-tab section show clearly
-// which steps belong to which dish, and lets the UI reveal more groups
-// ("Show more") without rerolling.
+// Collects mise-en-place prep tasks from recipes, grouped by recipe:
+// returns an array of `{ recipeId, recipeName, pct, tasks: string[] }` in
+// random order. Grouping (rather than a flat task sample) lets the
+// Cook-tab section show clearly which steps belong to which dish, and lets
+// the UI reveal more groups ("Show more") without rerolling.
 //
-// "Cookable" = makeability pct >= PREP_COOKABLE_PCT (70, matching the
-// leverageScore "already makeable" cutoff above). Each cookable recipe
-// with at least one non-empty prep_steps entry becomes one group. The
-// groups are Fisher-Yates shuffled so a reroll surfaces a varied set, but
-// the full list is returned — the component slices it for the visible
-// window. Empty array when no cookable recipe has any prep_steps — the
-// Cook-tab section hides itself in that case.
+// `minPct` is the makeability floor — only recipes you already have at
+// least this % of ingredients for are included (driven by the section's
+// "Min makeable %" slider). PREP_COOKABLE_PCT (70) is the "can make right
+// now" reference but is no longer hardcoded as the gate. Each qualifying
+// recipe with ≥1 non-empty prep_steps entry becomes one group, carrying
+// its makeability `pct` so the UI can show it. The groups are Fisher-Yates
+// shuffled so a reroll surfaces a varied set; the full list is returned
+// and the component slices it for the visible window.
 //
 // `outOfStock` is the Set of item names flagged out; it's passed through
 // to pantryMatchSet so out-of-stock items don't count toward makeability.
 export const PREP_COOKABLE_PCT = 70;
 
-export function extractPrepGroups(recipes, pantry, outOfStock) {
+export function extractPrepGroups(recipes, pantry, outOfStock, minPct = 0) {
   const matchSet = pantryMatchSet(pantry, outOfStock);
   const groups = [];
   for (const r of recipes) {
     const steps = Array.isArray(r.prep_steps) ? r.prep_steps : [];
     if (!steps.length) continue;
-    if (makeability(r, matchSet).pct < PREP_COOKABLE_PCT) continue;
+    const pct = makeability(r, matchSet).pct;
+    if (pct < minPct) continue;
     const tasks = steps
       .map((s) => (typeof s === "string" ? s.trim() : ""))
       .filter(Boolean);
-    if (tasks.length) groups.push({ recipeId: r.id, recipeName: r.name, tasks });
+    if (tasks.length) groups.push({ recipeId: r.id, recipeName: r.name, pct, tasks });
   }
   // Fisher-Yates shuffle the whole list so each reroll varies which
   // recipes lead; the component decides how many groups to show.
