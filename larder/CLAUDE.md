@@ -124,21 +124,22 @@ See `KNOWN_ISSUES.md`. `"almond milk"` → `"tree nut"` is intentional (almond i
 
 ## Current state
 
-**Last verified:** 2026-06-02
-**Last commit:** `7676dbb` — retro polish: VT323 font + chunky borders + pixelated jar in retro brand-style mode. Earlier: `5f02574` Apps Script expiry digest, `0d03199` Basket→tab 2, `a42047d` `khalilAllergenFlag` cow-milk fix. Live at https://maxnem17-a11y.github.io/grocery-app/. **2026-06-02:** backlog #9 code shipped (prep_steps migration + extractPrepTasks + PrepSuggestions section — awaiting curation) + pantry data audit fixes (2 allergen flags + 13 stale rows).
+**Last verified:** 2026-06-03
+**Last commit:** `db8c197` — backlog #9 "Got 5 mins?" prep suggestions (code side). Earlier: `7676dbb` retro polish, `5f02574` Apps Script expiry digest, `0d03199` Basket→tab 2. Live at https://maxnem17-a11y.github.io/grocery-app/. **2026-06-03:** backlog #9 curation landed — `prep_steps` bulk-populated across all 178 recipes (163 populated, 631 tasks, avg 3.9; 15 left empty by design: drinks/smoothies/build-and-serve/caption-stub recipes). Auto-derived from ingredient prep-annotations (chop/peel/deseed/grate/beat + make-ahead pastes/rubs/marinades/batters/sauces), NOT from prose steps. The "Got 5 mins?" Cook-tab section is now live (renders tasks from currently-cookable recipes, makeability ≥70). DB-only change; no code or migration. Max can hand-edit any recipe's `prep_steps` later — #9 was always designed for curation.
 **App shell:** `src/App.jsx` wraps the tree in `<ReceiptsProvider>` + `<AllergensProvider>` + `<RecipesProvider>` (recipes state + updateRecipePage owned by RecipesContext post-7g/7h), runs the pantry + cooked boot fetch, owns the pantry sync slice + cooked-log mutation slice (`addCooked` / `cookedSyncErrors`), holds App-scope `eaterFilter` state for RecipesView, mounts `<LarderBrand>` + a clickable tab strip with `<TabIcon>` glyphs + `<LarderFooter>` around the active view. Default tab is `"planner"`. Tab order diverges from canonical (Basket promoted to #2 on 2026-06-01). Tab state is in-memory only.
 **Smoke test:** ⚠ Browser smoke-test skipped in 7i per user direction (workflow change: "no need to wait for OK if confident"); correctness verified via static analysis + build green at 49 modules. Static review confirmed hook ordering, useMemo deps, addCooked closure semantics, page-edit input wires updateRecipePage via useRecipes(), and TabIcon "recipes" kind already implemented in 7f-3.
 
 ### Completed
 
-#### #9 — "Got 5 mins?" prep-ahead suggestions (CODE SHIPPED 2026-06-02; awaiting curation)
+#### #9 — "Got 5 mins?" prep-ahead suggestions (SHIPPED + CURATED 2026-06-03 — live)
 Cook-tab section surfacing a random sample of mise-en-place prep tasks from currently-cookable recipes. Built per the 2026-06-02 scope (decisions A1–G1).
 - **Migration `add_prep_steps_to_recipes`**: additive `prep_steps jsonb NOT NULL DEFAULT '[]'::jsonb` on `public.recipes` (+ column comment). All 178 rows default to `[]`.
 - `src/lib/supabase.js` — `mapRecipeRow` passes `prep_steps` through (`row.prep_steps || []`).
 - `src/lib/recipe-match.js` — `extractPrepTasks(recipes, pantry, outOfStock, count=5)` + `PREP_COOKABLE_PCT=70`. Filters recipes with makeability ≥70 that have ≥1 prep_steps entry, flattens to `{task, recipeId, recipeName}`, returns a partial-Fisher-Yates uniform random sample. **Signature deviates from scope** (`outOfStock` added) so out-of-stock items don't inflate makeability — same matchSet inputs PlannerView already uses.
 - `src/components/PrepSuggestions.jsx` (~55 lines) — owns a `reroll` useState (↻ Refresh button, E1) + memoised sample; renders a Section (tone accent, collapsible, defaultOpen false). Returns `null` when sample is empty (F1 empty-state).
 - `src/components/PlannerView.jsx` — mounts `<PrepSuggestions recipes pantry outOfStock/>` after "Quick wins", before "Cooked log" (A1: after groupings).
-- Build green (64 modules). **Section is hidden until Max curates `prep_steps` for some cookable recipes** — the precondition. See [#10] for dismiss-state follow-up. Browser smoke-test skipped per workflow.
+- Build green (64 modules). See [#10] for dismiss-state follow-up. Browser smoke-test skipped per workflow.
+- **Curation landed 2026-06-03** (DB-only, no code): `prep_steps` bulk-populated across all 178 recipes via 6 parallel subagents writing to Supabase. Auto-derived from the ingredient `item` prep-annotations (e.g. `"red onion, roughly chopped"` → `"Roughly chop the red onion"`) plus make-ahead components (rubs/pastes/marinades/batters/sauces); cooking actions + last-minute garnishes + trivial pantry-staple measuring excluded. Result: **163/178 populated, 631 tasks, avg 3.9**; 15 left empty by design (drinks, smoothies, build-and-serve, caption-only stub recipes with no holdable prep). Deviation from original scope's B1 (Max hand-curates) — Max asked for a bulk first pass; everything is editable per-recipe later. The Cook-tab section is now live (shows tasks from currently-cookable recipes only, makeability ≥70).
 
 #### Pantry data audit + fixes (2026-06-02)
 Live `pantry_items` audit (86 rows). Applied via MCP after user confirmation:
