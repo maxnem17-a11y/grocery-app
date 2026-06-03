@@ -125,40 +125,44 @@ export function leverageScore(recipes, matchSet, limit) {
   return limit ? out.slice(0, limit) : out;
 }
 
-// extractPrepTasks — backlog #9 ("Got 5 mins?" prep-ahead suggestions).
+// extractPrepGroups — backlog #9 ("Got 5 mins?" prep-ahead suggestions).
 //
 // Collects mise-en-place prep tasks from recipes the household can
-// currently make, and returns a uniform random sample of `count` tasks.
+// currently make, grouped by recipe: returns an array of
+// `{ recipeId, recipeName, tasks: string[] }` in random order. Grouping
+// (rather than a flat task sample) lets the Cook-tab section show clearly
+// which steps belong to which dish, and lets the UI reveal more groups
+// ("Show more") without rerolling.
 //
 // "Cookable" = makeability pct >= PREP_COOKABLE_PCT (70, matching the
 // leverageScore "already makeable" cutoff above). Each cookable recipe
-// contributes its `prep_steps[]` entries (plain strings); we flatten them
-// with a back-pointer to the parent recipe so the UI can show what each
-// task is for. Returns up to `count` tasks sampled uniformly at random
-// (partial Fisher-Yates). Empty array when no cookable recipe has any
-// prep_steps — the Cook-tab section hides itself in that case.
+// with at least one non-empty prep_steps entry becomes one group. The
+// groups are Fisher-Yates shuffled so a reroll surfaces a varied set, but
+// the full list is returned — the component slices it for the visible
+// window. Empty array when no cookable recipe has any prep_steps — the
+// Cook-tab section hides itself in that case.
 //
 // `outOfStock` is the Set of item names flagged out; it's passed through
 // to pantryMatchSet so out-of-stock items don't count toward makeability.
 export const PREP_COOKABLE_PCT = 70;
 
-export function extractPrepTasks(recipes, pantry, outOfStock, count = 5) {
+export function extractPrepGroups(recipes, pantry, outOfStock) {
   const matchSet = pantryMatchSet(pantry, outOfStock);
-  const pool = [];
+  const groups = [];
   for (const r of recipes) {
     const steps = Array.isArray(r.prep_steps) ? r.prep_steps : [];
     if (!steps.length) continue;
     if (makeability(r, matchSet).pct < PREP_COOKABLE_PCT) continue;
-    for (const s of steps) {
-      const task = typeof s === "string" ? s.trim() : "";
-      if (task) pool.push({ task, recipeId: r.id, recipeName: r.name });
-    }
+    const tasks = steps
+      .map((s) => (typeof s === "string" ? s.trim() : ""))
+      .filter(Boolean);
+    if (tasks.length) groups.push({ recipeId: r.id, recipeName: r.name, tasks });
   }
-  // Partial Fisher-Yates: shuffle just the first `count` positions.
-  const n = Math.min(count, pool.length);
-  for (let i = 0; i < n; i++) {
-    const j = i + Math.floor(Math.random() * (pool.length - i));
-    [pool[i], pool[j]] = [pool[j], pool[i]];
+  // Fisher-Yates shuffle the whole list so each reroll varies which
+  // recipes lead; the component decides how many groups to show.
+  for (let i = groups.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [groups[i], groups[j]] = [groups[j], groups[i]];
   }
-  return pool.slice(0, count);
+  return groups;
 }
