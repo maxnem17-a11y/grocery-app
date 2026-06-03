@@ -27,7 +27,7 @@
 //   recipes            — array of mapped recipe rows (from useRecipes())
 //   pantry             — array of mapped pantry rows
 //   outOfStock         — Set of item names flagged out (feeds makeability)
-//   initialGroups      — recipe groups shown before "Show more" (default 3)
+//   initialGroups      — recipe groups shown before "Show more" (default 6)
 //   defaultMinMakeable — starting slider value (default 60)
 // ============================================================
 
@@ -35,7 +35,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Section } from "./primitives.jsx";
 import { extractPrepGroups } from "../lib/recipe-match.js";
 
-export default function PrepSuggestions({ recipes, pantry, outOfStock, initialGroups = 3, defaultMinMakeable = 60 }) {
+export default function PrepSuggestions({ recipes, pantry, outOfStock, initialGroups = 6, defaultMinMakeable = 60 }) {
   // `reroll` reshuffles the recipe order on demand (E1). The shuffle is
   // otherwise stable across unrelated re-renders because it's memoised.
   const [reroll, setReroll] = useState(0);
@@ -78,14 +78,12 @@ export default function PrepSuggestions({ recipes, pantry, outOfStock, initialGr
       <button className="pill" onClick={() => setReroll(r => r + 1)} title="Reshuffle the recipes">↻ Refresh</button>
     </div>
     {shown.length ? <>
-      <div className="space-y-3">
+      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
         {shown.map(g => (
-          <div key={g.recipeId} className="border-l-2 border-teal-600 pl-3">
-            <div className="flex items-baseline justify-between gap-3">
-              <span className="text-sm font-semibold text-stone-800">{g.recipeName}</span>
-              <span className="text-xs text-stone-400 shrink-0">{g.pct}% makeable · {g.tasks.length} step{g.tasks.length > 1 ? "s" : ""}</span>
-            </div>
-            <ul className="text-sm text-stone-700 mt-1 space-y-0.5">
+          <div key={g.recipeId} className="card text-sm px-3 py-2.5">
+            <div className="font-semibold text-stone-800 leading-tight">{g.recipeName}</div>
+            <div className="text-xs text-stone-400 mb-1.5">{g.pct}% makeable · {g.tasks.length} step{g.tasks.length > 1 ? "s" : ""}</div>
+            <ul className="text-stone-700 space-y-0.5">
               {g.tasks.map((t, i) => (
                 <li key={i} className="flex gap-2">
                   <span className="text-teal-600/60 shrink-0">•</span>
