@@ -61,6 +61,39 @@ export function makeability(recipe, matchSet) {
   return { pct: Math.round(100 * have.length / ings.length), have, missing };
 }
 
+// ============================================================
+// Meal-section noise filter (Cook tab redesign)
+// ============================================================
+// The Cook tab's left-column meal sections (Tonight's pick, Everybody
+// eats, Quick wins, Gains) should only surface actual *meals* — not
+// condiments, drinks, 2-hour marmalades, or other non-dinner recipes.
+// `isNoiseRecipe` is the section-level gate: a recipe is noise if it
+// takes too long to be a weeknight option (>90 min total) OR carries a
+// tag that marks it as not-a-meal.
+//
+// The spec's literal exclusion list is condiment/drink/remedy/syrup/
+// marmalade/sweet-only; NOISE_TAGS maps that intent onto the tags that
+// actually exist in the recipes data (e.g. `winter-remedy` for remedy,
+// `jam`/`preserve` for marmalade, `sweet`/`dessert` for sweet-only) plus
+// the obvious make-ahead-component tags (rubs, marinades, spice blends)
+// that share the same "not a dinner" character.
+export const NOISE_TAGS = new Set([
+  "condiment", "drink", "remedy", "winter-remedy", "syrup", "marmalade",
+  "jam", "preserve", "sweet-only", "sweet", "dessert", "spice-blend",
+  "seasoning", "dry-rub", "wet-rub", "marinade", "hot-sauce", "ketchup",
+  "starter-culture",
+]);
+
+export function totalTime(r) {
+  return (r.prep_time_mins || 0) + (r.cook_time_mins || 0);
+}
+
+export function isNoiseRecipe(r) {
+  if (totalTime(r) > 90) return true;
+  const tags = Array.isArray(r.tags) ? r.tags : [];
+  return tags.some(t => NOISE_TAGS.has(String(t).toLowerCase()));
+}
+
 // leverageScore — verbatim port of canonical L1196–1246. Appended in
 // step 7j-1 alongside SuggestedBasket extraction.
 //

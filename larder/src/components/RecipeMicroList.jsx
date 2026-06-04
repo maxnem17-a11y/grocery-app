@@ -43,6 +43,9 @@ export default function RecipeMicroList({ items }) {
             <Chip tone="neutral">{r._make.pct}% have</Chip>
             {total > 0 && <Chip tone="neutral">{total}m</Chip>}
             {r.protein_per_serving_g != null && <Chip tone={r.protein_per_serving_g >= 30 ? "ok" : "neutral"}>{r.protein_per_serving_g}g</Chip>}
+            {/* Dedup cross-reference: set by PlannerView when this recipe also
+                qualifies for a lower-priority section (e.g. "also expiring"). */}
+            {r._alsoNote && <Chip tone="accent">{r._alsoNote}</Chip>}
           </div>
         </div>
         {open && <div className="px-3 pb-3 grid sm:grid-cols-2 gap-3 text-xs border-t border-stone-100 pt-3">

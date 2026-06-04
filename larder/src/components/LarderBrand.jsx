@@ -27,9 +27,11 @@
 //                         !showHelpBanner)
 // ============================================================
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Bar, InfoTip } from "./primitives.jsx";
+import { daysUntilExpiry } from "../lib/pantry-math.js";
 
-export default function LarderBrand({ pantry, nextDelivery, showHelpBanner, setShowHelpBanner }) {
+export default function LarderBrand({ pantry, nextDelivery, showHelpBanner, setShowHelpBanner, goToBasket }) {
   // Load saved style on first render. Default to "modern" if nothing saved.
   const [style, setStyle] = useState(() => {
     try { return localStorage.getItem("larder-brand-style") || "modern"; }
@@ -74,6 +76,33 @@ export default function LarderBrand({ pantry, nextDelivery, showHelpBanner, setS
     if (totalWeight === 0) return 50;
     return Math.round(weightedConf / totalWeight);
   }, [pantry]);
+
+  // Pantry-fill tooltip figures: in-stock items tracked + how many are
+  // expiring within 5 days (matches the "Going soon" rail window).
+  const itemsTracked = useMemo(
+    () => (pantry || []).filter(p => !p._out_of_stock).length, [pantry]);
+  const expiringSoon = useMemo(() => (pantry || []).filter(p => {
+    if (p._out_of_stock) return false;
+    const d = daysUntilExpiry(p);
+    return d !== null && d >= 0 && d <= 5;
+  }).length, [pantry]);
+
+  // Preferences popover (style toggle + Help, demoted out of the header).
+  const [prefsOpen, setPrefsOpen] = useState(false);
+  const prefsRef = useRef(null);
+  useEffect(() => {
+    if (!prefsOpen) return;
+    const onDown = (e) => { if (prefsRef.current && !prefsRef.current.contains(e.target)) setPrefsOpen(false); };
+    const onKey = (e) => { if (e.key === "Escape") setPrefsOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("touchstart", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("touchstart", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [prefsOpen]);
 
   // Days to next delivery — used to brass the lid on delivery day.
   const daysToDelivery = useMemo(() => {
@@ -153,18 +182,53 @@ export default function LarderBrand({ pantry, nextDelivery, showHelpBanner, setS
               style={{ fontFamily: "Georgia, 'Times New Roman', serif", letterSpacing: "-0.02em" }}>
             Larder
           </h1>
-          <p className="text-stone-500 text-sm mt-1">
-            {deliveryLine} · pantry {fillPct}% full
-          </p>
+          <div className="flex items-center gap-2.5 mt-1.5 flex-wrap">
+            <button
+              onClick={() => goToBasket && goToBasket()}
+              className="pill"
+              title="Go to the Basket tab"
+            >
+              {deliveryLine} →
+            </button>
+            <span className="flex items-center gap-1.5" title={`Pantry ${fillPct}% full`}>
+              <span style={{ display: "inline-block", width: 72 }}><Bar pct={fillPct} /></span>
+              <span className="text-xs text-stone-600">{fillPct}%</span>
+              <InfoTip>{fillPct}% — {itemsTracked} items tracked · {expiringSoon} expiring soon</InfoTip>
+            </span>
+          </div>
         </div>
       </div>
-      <div className="flex items-center gap-1.5">
-        <span className="text-stone-400 mono" style={{ fontSize: "10px", letterSpacing: "1px" }}>STYLE</span>
-        <button onClick={() => setStyle("modern")} data-active={style === "modern"}
-                className="pill" title="Clean forest-green jar">modern</button>
-        <button onClick={() => setStyle("retro")} data-active={style === "retro"}
-                className="pill" title="16-bit pixel-art jar">retro</button>
-        {setShowHelpBanner && !showHelpBanner && <button onClick={() => setShowHelpBanner(true)} className="pill ml-1" title="Reopen the introduction panel">? Help</button>}
+      <div className="relative" ref={prefsRef}>
+        <button
+          onClick={() => setPrefsOpen(o => !o)}
+          aria-haspopup="true"
+          aria-expanded={prefsOpen}
+          aria-label="Preferences"
+          className="pill"
+          title="Preferences"
+        >
+          ⚙
+        </button>
+        {prefsOpen && (
+          <div className="absolute right-0 top-full mt-1 z-50 w-48 rounded-lg border border-stone-200 bg-white p-2.5 shadow-lg">
+            <div className="text-[10px] uppercase tracking-wider text-stone-500 mb-1.5">Jar style</div>
+            <div className="flex items-center gap-1.5">
+              <button onClick={() => setStyle("modern")} data-active={style === "modern"}
+                      className="pill" title="Clean forest-green jar">modern</button>
+              <button onClick={() => setStyle("retro")} data-active={style === "retro"}
+                      className="pill" title="16-bit pixel-art jar">retro</button>
+            </div>
+            {setShowHelpBanner && (
+              <button
+                onClick={() => { setShowHelpBanner(true); setPrefsOpen(false); }}
+                className="pill mt-2.5 w-full"
+                title="Reopen the introduction panel"
+              >
+                ? Help
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
