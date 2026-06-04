@@ -1,33 +1,42 @@
 // ============================================================
-// SuggestedBasket — basket recommendation engine inside the Basket tab
+// SuggestedBasket — the one canonical basket view (Basket overhaul)
 // ============================================================
-// Verbatim port of canonical index.html L1849–2270. Step 7j-1.
+// Originally a flat ranked table (canonical L1849–2270, ported 7j-1).
+// Restructured in the 2026-06 Basket overhaul into three reason-grouped,
+// collapsible sections with per-row remove, an "Excluded for this cycle"
+// drawer, and Cook-tab banner linkage. Ranking inputs are unchanged —
+// only the grouping/surfacing and the expiring source changed.
 //
-// Combines three input streams into a single ranked basket:
-//   1. Pantry items expiring before the next suggested delivery
-//   2. Likely gaps from order history (computeRegularsAndGaps)
-//   3. High-leverage ingredients (each unlocks multiple recipes)
+// Three groups (visual weight high→low matches the reasons):
+//   🔴 Replace what's expiring — pantry items the user marked "Used" or
+//      "Binned" on the Cook tab banner (last_marked_action). "Still good"
+//      suppresses an item from here. NOT raw expiring items — those are
+//      triaged on Cook first.
+//   🟡 Refill regulars — order-history gaps (computeRegularsAndGaps).
+//   🟢 Unlock recipes — leverage picks + ingredients the user added from
+//      the leverage table (addedIngredients, lifted to GapsView).
 //
-// Each item is SKU-resolved (lookupSku) for direct Tesco product
-// links, with a search-URL fallback. Items get a price estimate
-// from buildPriceIndex if the family appeared in past orders.
-// Household never-restock rules filter out forbidden items
-// (regex patterns + per-SKU exclusions).
-//
-// Structural changes vs. canonical (no behaviour change):
-//   - hooks via named import from "react"
-//   - context reads use the extracted hooks (useReceipts,
-//     useAllergens, useTescoSkus, useRecipes) instead of bare
-//     useContext(...) — matches 7g/7i pattern
-//   - RECIPES module global → recipes from useRecipes()
+// Shared state lifted to GapsView so the basket and the leverage table
+// stay in sync:
+//   addedIngredients — names added via the leverage "Add to basket" CTA;
+//      unioned into the matchSet (so leverage re-ranks) AND surfaced as
+//      explicit Unlock-recipes rows.
+//   excludedItems    — names removed via the per-row ×; moved to the
+//      Excluded drawer, restorable. Persists for this delivery cycle.
+//   minOrders        — the "regular" threshold; shared with the KPI so
+//      the REAL GAPS count reconciles.
 //
 // Props:
-//   pantry      — mapped pantry rows
-//   outOfStock  — Set of item names flagged out
+//   pantry, outOfStock        — mapped pantry rows + out Set
+//   minOrders, setMinOrders   — regular threshold (lifted; settings pill)
+//   addedIngredients          — Set<string> normalised names (lifted)
+//   excludedItems             — Set<string> lowercased basket names (lifted)
+//   onRemoveItem(name)        — exclude a row this cycle
+//   onRestoreItem(name)       — restore from the Excluded drawer
 // ============================================================
 
 import { useMemo, useState } from "react";
-import { Chip, Section } from "./primitives.jsx";
+import { Chip, InfoTip, Section } from "./primitives.jsx";
 import { TODAY, daysUntilExpiry, formatDate } from "../lib/pantry-math.js";
 import { lc } from "../lib/text.js";
 import { audienceFromFlags, flagsForRecipe } from "../lib/allergens.js";
@@ -42,426 +51,438 @@ import { useReceipts } from "../contexts/ReceiptsContext.jsx";
 import { useRecipes } from "../contexts/RecipesContext.jsx";
 import { useTescoSkus } from "../contexts/TescoSkusContext.jsx";
 
-export default function SuggestedBasket({pantry, outOfStock}){
+const GROUP_META = {
+  expiring: { emoji: "🔴", label: "Replace what's expiring", tint: "border-l-4 border-l-red-400 bg-red-50/30",
+    tip: "Items you marked Used or Binned on the Cook tab banner. Items marked \"Still good\" are suppressed — triage expiry on the Cook tab first." },
+  gap: { emoji: "🟡", label: "Refill regulars", tint: "border-l-4 border-l-amber-400 bg-amber-50/30",
+    tip: "Items you buy regularly that are missing from both your latest order and the pantry." },
+  leverage: { emoji: "🟢", label: "Unlock recipes", tint: "border-l-4 border-l-emerald-400 bg-emerald-50/30",
+    tip: "High-leverage ingredients — each unlocks several recipes. Includes anything you added from the leverage table below." },
+};
+
+export default function SuggestedBasket({ pantry, outOfStock, minOrders = 3, setMinOrders,
+  addedIngredients = new Set(), excludedItems = new Set(), onRemoveItem, onRestoreItem }) {
   const { receipts } = useReceipts();
   const { allergens } = useAllergens();
   const { skuIndex } = useTescoSkus();
   const { recipes, version: recipesVersion } = useRecipes();
 
-  // Recipe decoration: needed because leverage scoring runs over decorated
-  // recipes, and leverage is one of the three basket inputs.
-  const matchSet = useMemo(()=> pantryMatchSet(pantry, outOfStock), [pantry, outOfStock]);
-  const decorated = useMemo(()=> recipes.map(r=>{
+  // matchSet unions in addedIngredients so leverage re-ranks as the user
+  // adds ingredients (added ones count as "available" and drop out).
+  const matchSet = useMemo(() => {
+    const s = pantryMatchSet(pantry, outOfStock);
+    for (const a of addedIngredients) s.add(a);
+    return s;
+  }, [pantry, outOfStock, addedIngredients]);
+  const decorated = useMemo(() => recipes.map(r => {
     const m = makeability(r, matchSet);
     const f = flagsForRecipe(r, allergens);
-    return {...r, _make:m, _flags:f, _audience: r.audience || audienceFromFlags(f)};
+    return { ...r, _make: m, _flags: f, _audience: r.audience || audienceFromFlags(f) };
   }), [recipes, matchSet, allergens, recipesVersion]);
-  const leverage = useMemo(()=> leverageScore(decorated, matchSet, 12), [decorated, matchSet]);
+  const leverage = useMemo(() => leverageScore(decorated.filter(r => r._flags.khalil !== "blocked"), matchSet, 12), [decorated, matchSet]);
 
-  // Expiring set (basket input #1).
-  const expiring = pantry.filter(p=>!outOfStock.has(p.item)).map(p=>({...p, _dExp:daysUntilExpiry(p)})).filter(p=>p._dExp!==null && p._dExp<=5).sort((a,b)=>a._dExp-b._dExp);
+  const priceIndex = useMemo(() => buildPriceIndex(receipts), [receipts]);
+  const gapAnalysis = useMemo(() => computeRegularsAndGaps(pantry, receipts, allergens, minOrders, skuIndex), [pantry, receipts, allergens, minOrders, skuIndex]);
+  const nextDelivery = useMemo(() => suggestNextDelivery(receipts), [receipts]);
 
-  const priceIndex = useMemo(()=> buildPriceIndex(receipts), [receipts]);
-  const gapAnalysis = useMemo(()=> computeRegularsAndGaps(pantry, receipts, allergens, 3, skuIndex), [pantry, receipts, allergens, skuIndex]);
-  const nextDelivery = useMemo(()=> suggestNextDelivery(receipts), [receipts]);
-
-  // Track which basket items have already been opened in a Tesco tab (by SKU).
-  // Per-session only — resets on page reload so a fresh shop starts clean. We
-  // key on SKU rather than name so duplicates and substitutions stay distinct.
-  // The "Open next" button advances through openable items in basket order,
-  // skipping anything without a SKU (needs_sku_lookup) or anything already
-  // opened. One click = one tab, deliberately — pop-up blockers will eat a
-  // burst of window.open() calls from a single click, and one-at-a-time
-  // keeps the review-as-you-go flow that surfaces wrong product pages early.
   const [openedSkus, setOpenedSkus] = useState(new Set());
+  const [groupOpen, setGroupOpen] = useState({ expiring: true, gap: true, leverage: true });
+  const [showExcluded, setShowExcluded] = useState(false);
+  const [showRegulars, setShowRegulars] = useState(false);
+  const [regFilter, setRegFilter] = useState("gap"); // gap | restocked | excluded | all
+  const [showSettings, setShowSettings] = useState(false);
+  const [copyState, setCopyState] = useState("idle");
 
-  const basket = useMemo(()=>{
-    const items = [];
-    const seen = new Set(); // dedupe by lowercase canonical name
-
-    // Days until the suggested next delivery — items expiring within this window
-    // will need restocking by then.
-    const daysToDelivery = nextDelivery.date
-      ? Math.max(1, Math.round((new Date(nextDelivery.date + "T12:00:00Z") - TODAY)/(1000*60*60*24)))
-      : 7;
-    // Add a 2-day buffer so something expiring on delivery day still flags.
-    const expiryHorizon = daysToDelivery + 2;
-
-    // Helper: build a basket-item entry from a name + reason + optional pantry context.
-    // qtyHint: explicit suggested count (else falls back to typicalQty or 1).
-    //
-    // SKU resolution (Step 2 of basket automation): look up the item in
-    // tesco_skus and attach tesco_sku / tesco_url / khalil_critical to the
-    // returned entry. If no match is found, needs_sku_lookup=true is set so
-    // downstream steps (export button, Chrome handoff) can mark the item
-    // visibly rather than silently dropping it. Resolution is exact-match
-    // on the lowercased name; the seeding step used the same normalisation.
-    const buildItem = (name, kind, why, whySub, qtyHint) => {
-      const priced = lookupPriceForIngredient(name, priceIndex);
-      const qty = qtyHint != null ? qtyHint : (priced && priced.typicalQty ? priced.typicalQty : 1);
-      const unitPrice = priced ? priced.unitGbp : null;
-      const totalPrice = unitPrice != null ? unitPrice * qty : null;
-      const skuRow = lookupSku(name, skuIndex);
-      return {
-        kind, name, why, whySub,
-        qty, packSize: priced ? priced.packSize : null,
-        unitPrice, totalPrice,
-        priceSource: priced ? priced.source : null,
-        // Step 2 fields — present on every item; downstream UI/export logic
-        // reads these. tesco_sku and tesco_url are null when no SKU row
-        // matched; needs_sku_lookup makes that condition explicit for filters.
-        // tesco_search_url is always populated (it's just an encoded query) —
-        // used as the click target when tesco_url is null, so every basket
-        // item is clickable rather than just the seeded ones.
-        tesco_sku: skuRow ? skuRow.tesco_sku : null,
-        tesco_url: skuRow ? skuRow.tesco_url : null,
-        tesco_name: skuRow ? skuRow.tesco_name : null,
-        tesco_search_url: tescoSearchUrl(name),
-        khalil_critical: skuRow ? !!skuRow.khalil_critical : false,
-        needs_sku_lookup: !skuRow,
-      };
+  // Build a basket-item entry. SKU + price resolution unchanged from 7j-1.
+  const buildItem = useMemo(() => (name, kind, why, whySub, qtyHint) => {
+    const priced = lookupPriceForIngredient(name, priceIndex);
+    const qty = qtyHint != null ? qtyHint : (priced && priced.typicalQty ? priced.typicalQty : 1);
+    const unitPrice = priced ? priced.unitGbp : null;
+    const totalPrice = unitPrice != null ? unitPrice * qty : null;
+    const skuRow = lookupSku(name, skuIndex);
+    return {
+      kind, name, why, whySub,
+      qty, packSize: priced ? priced.packSize : null,
+      unitPrice, totalPrice, priceSource: priced ? priced.source : null,
+      tesco_sku: skuRow ? skuRow.tesco_sku : null,
+      tesco_url: skuRow ? skuRow.tesco_url : null,
+      tesco_name: skuRow ? skuRow.tesco_name : null,
+      tesco_search_url: tescoSearchUrl(name),
+      khalil_critical: skuRow ? !!skuRow.khalil_critical : false,
+      needs_sku_lookup: !skuRow,
     };
+  }, [priceIndex, skuIndex]);
 
-    // 1) Pantry items expiring before the next delivery — likely needs restocking.
-    const expiryRestock = pantry
-      .filter(p => !outOfStock.has(p.item))
-      .map(p => ({ ...p, _dExp: daysUntilExpiry(p) }))
-      .filter(p => p._dExp !== null && p._dExp <= expiryHorizon && p._dExp >= -3)
-      .filter(p => !neverRestockReason(p.item, skuIndex))
-      .sort((a,b)=> a._dExp - b._dExp);
-    for (const p of expiryRestock) {
+  // ----- Build the three groups (+ excluded drawer) -----
+  const built = useMemo(() => {
+    const seen = new Set();
+    const exp = [], gaps = [], lev = [];
+    const excl = excludedItems;
+
+    // A) Replace what's expiring — items triaged Used/Binned on the Cook banner.
+    const triaged = pantry
+      .filter(p => p._last_marked_action === "used" || p._last_marked_action === "binned")
+      .filter(p => !neverRestockReason(p.item, skuIndex));
+    for (const p of triaged) {
       const key = lc(p.item);
       if (seen.has(key)) continue;
       seen.add(key);
-      const expiryDateStr = p.expires ? formatDate(p.expires) : null;
-      const why = p._dExp < 0
-        ? `expired ${Math.abs(p._dExp)}d ago — restock`
-        : p._dExp === 0
-          ? `expires today — restock`
-          : `expires in ${p._dExp}d (by delivery)`;
-      items.push(buildItem(p.item, "expiring", why, expiryDateStr ? `expiry: ${expiryDateStr}` : null));
+      const it = buildItem(p.item, "expiring", `${p._last_marked_action} — restock`, p.expires ? `was due ${formatDate(p.expires)}` : null);
+      it.action = p._last_marked_action;
+      exp.push(it);
     }
 
-    // 2) Likely gaps (from order history) — high signal, you bought these regularly
-    const gapCandidates = (gapAnalysis?.gaps || []).slice(0, 20);
-    for (const g of gapCandidates) {
+    // B) Refill regulars — order-history gaps.
+    for (const g of (gapAnalysis?.gaps || [])) {
       const key = lc(g.example);
       if (seen.has(key)) continue;
       seen.add(key);
-      const whySub = g.lastSeenDate ? `last: ${formatDate(g.lastSeenDate)}` : null;
-      items.push(buildItem(g.example, "gap", `bought in ${g.count} past orders`, whySub));
+      gaps.push(buildItem(g.example, "gap", `bought in ${g.count} past orders`, g.lastSeenDate ? `last: ${formatDate(g.lastSeenDate)}` : null));
     }
 
-    // 3) Top leverage ingredients — adding these unlocks the most blocked recipes
-    const leverageCandidates = (leverage || []).slice(0, 12);
-    for (const lv of leverageCandidates) {
-      const lvName = lv.ingredient || lv.item || "";
+    // C) Unlock recipes — manual adds first, then auto leverage suggestions.
+    for (const name of addedIngredients) {
+      const key = lc(name);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const it = buildItem(name, "leverage", "added — unlocks recipes", null, 1);
+      it.manual = true;
+      lev.push(it);
+    }
+    for (const lvr of (leverage || [])) {
+      const lvName = lvr.ingredient || lvr.item || "";
       const key = lc(lvName);
       if (!key || seen.has(key)) continue;
       const inPantry = pantry.some(p => lc(p.item).includes(key) || key.includes(lc(p.item)));
       if (inPantry && !outOfStock.has(lvName)) continue;
       if (neverRestockReason(lvName, skuIndex)) continue;
-      seen.add(key);
-      const unlockCount = lv.unlockedTo70 || lv.unlocks || 0;
-      const mentionCount = lv.recipeCount || lv.mentions || 0;
+      const unlockCount = lvr.unlockedTo70 || lvr.unlocks || 0;
+      const mentionCount = lvr.recipeCount || lvr.mentions || 0;
       if (unlockCount === 0 && mentionCount < 3) continue;
-      const whyText = unlockCount > 0
-        ? `unlocks ${unlockCount} recipe${unlockCount===1?"":"s"} (appears in ${mentionCount})`
-        : `appears in ${mentionCount} blocked recipes`;
-      // Leverage items: we want 1 pack typically (try-before-bulk), regardless of historical qty
-      items.push(buildItem(lvName, "leverage", whyText, null, 1));
+      seen.add(key);
+      const it = buildItem(lvName, "leverage", unlockCount > 0
+        ? `unlocks ${unlockCount} recipe${unlockCount === 1 ? "" : "s"} (in ${mentionCount})`
+        : `appears in ${mentionCount} recipes`, null, 1);
+      it.unlockCount = unlockCount;
+      lev.push(it);
     }
 
-    const priced = items.filter(x => x.totalPrice != null);
-    const total = priced.reduce((s, x) => s + x.totalPrice, 0);
-    const unpriced = items.length - priced.length;
-    const counts = {
-      expiring: items.filter(x => x.kind === "expiring").length,
-      gap: items.filter(x => x.kind === "gap").length,
-      leverage: items.filter(x => x.kind === "leverage").length,
+    const keep = (arr) => arr.filter(x => !excl.has(lc(x.name)));
+    const all = [...exp, ...gaps, ...lev];
+    return {
+      expiring: keep(exp), gap: keep(gaps), leverage: keep(lev),
+      excluded: all.filter(x => excl.has(lc(x.name))),
     };
-    return { items, total, priced: priced.length, unpriced, counts, daysToDelivery };
-  }, [gapAnalysis, leverage, pantry, outOfStock, priceIndex, nextDelivery, skuIndex]);
+  }, [pantry, outOfStock, gapAnalysis, leverage, addedIngredients, excludedItems, skuIndex, buildItem]);
 
-  // ===== Basket actions: Open in Tesco + Export JSON =====
-  //
-  // Items split into three buckets for the action UI:
-  //   - openable: have a tesco_url, not yet opened this session
-  //   - opened: already clicked through (kept distinct so the count shows progress)
-  //   - blocked: no SKU resolved (needs_sku_lookup=true) — surfaced separately
-  //     so they're visible rather than silently dropped
-  const openableItems = useMemo(() => {
-    return basket.items.filter(b => b.tesco_url && !openedSkus.has(b.tesco_sku));
-  }, [basket.items, openedSkus]);
+  const groupTotal = (arr) => arr.reduce((s, x) => s + (x.totalPrice || 0), 0);
+  const allVisible = [...built.expiring, ...built.gap, ...built.leverage];
+  const grandTotal = groupTotal(allVisible);
+  const pricedCount = allVisible.filter(x => x.totalPrice != null).length;
 
-  const blockedItems = useMemo(() => {
-    return basket.items.filter(b => b.needs_sku_lookup);
-  }, [basket.items]);
+  // Untriaged expired items still sitting on the Cook tab (bridge hint).
+  const untriagedExpired = useMemo(() => pantry.filter(p =>
+    !outOfStock.has(p.item) && !p._last_marked_action &&
+    (() => { const d = daysUntilExpiry(p); return d !== null && d < 0; })()
+  ).length, [pantry, outOfStock]);
 
+  // Direct-SKU vs search-link split (2.8).
+  const directCount = allVisible.filter(b => b.tesco_url).length;
+  const searchCount = allVisible.filter(b => !b.tesco_url).length;
+
+  // ----- Open-in-Tesco + export (unchanged behaviour, operates on allVisible) -----
+  const openableItems = useMemo(() => allVisible.filter(b => b.tesco_url && !openedSkus.has(b.tesco_sku)), [allVisible, openedSkus]);
   const openNext = () => {
     const next = openableItems[0];
     if (!next) return;
-    // window.open returns null if the popup was blocked; we still mark it as
-    // opened so the user can advance past it rather than getting stuck. A
-    // blocked popup is a user-side setting, not something we can fix from JS.
     window.open(next.tesco_url, "_blank", "noopener,noreferrer");
-    setOpenedSkus(prev => {
-      const next2 = new Set(prev);
-      next2.add(next.tesco_sku);
-      return next2;
-    });
+    setOpenedSkus(prev => new Set(prev).add(next.tesco_sku));
   };
-
   const resetOpened = () => setOpenedSkus(new Set());
 
-  // Build the JSON payload for the Claude-in-Chrome handoff. Self-contained:
-  // every field the agent needs to add the basket without asking. Includes
-  // a _meta block with delivery date and household never-substitute rules
-  // (currently regex-based from RAW; SKU-level exclusions are already
-  // filtered out of basket.items by neverRestockReason so they won't show).
-  //
-  // Extracted as a shared builder so both download (file) and copy
-  // (clipboard) paths produce identical payloads — important because we
-  // don't yet know which Claude-in-Chrome prefers, and divergent payloads
-  // would make Step 4 dry runs harder to debug.
   const buildBasketPayload = () => ({
     _meta: {
       generated_at: new Date().toISOString(),
       suggested_delivery_date: nextDelivery.date || null,
-      item_count: basket.items.length,
-      openable_count: basket.items.filter(b => b.tesco_url).length,
-      needs_sku_lookup_count: blockedItems.length,
-      estimated_total_gbp: basket.total,
-      url_handling: {
-        note: "Each item has either tesco_url (direct product page, preferred) or only tesco_search_url (Tesco search results, fallback). If tesco_url is present, go straight to it and Add to Basket. If only tesco_search_url, perform the search and confirm with the user before adding — the search may return multiple plausible products.",
-      },
+      item_count: allVisible.length,
+      openable_count: directCount,
+      needs_sku_lookup_count: searchCount,
+      estimated_total_gbp: grandTotal,
       household_rules: {
         never_substitute_to: (HOUSEHOLD_RULES.never_restock || []).map(r => r.pattern),
         note: "Khalil-critical items must not be substituted. Decline all Tesco substitution offers.",
       },
     },
-    items: basket.items.map(b => ({
-      name: b.name,
-      qty: b.qty,
-      pack_size: b.packSize,
-      kind: b.kind,
-      why: b.why,
-      tesco_sku: b.tesco_sku,
-      tesco_url: b.tesco_url,
-      tesco_name: b.tesco_name,
-      tesco_search_url: b.tesco_search_url,
-      khalil_critical: b.khalil_critical,
-      needs_sku_lookup: b.needs_sku_lookup,
-      estimated_total_gbp: b.totalPrice,
+    items: allVisible.map(b => ({
+      name: b.name, qty: b.qty, pack_size: b.packSize, kind: b.kind, why: b.why,
+      tesco_sku: b.tesco_sku, tesco_url: b.tesco_url, tesco_name: b.tesco_name,
+      tesco_search_url: b.tesco_search_url, khalil_critical: b.khalil_critical,
+      needs_sku_lookup: b.needs_sku_lookup, estimated_total_gbp: b.totalPrice,
     })),
   });
-
   const downloadBasketJson = () => {
     const today = new Date().toISOString().slice(0, 10);
     const blob = new Blob([JSON.stringify(buildBasketPayload(), null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url;
-    a.download = `basket-${today}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    a.href = url; a.download = `basket-${today}.json`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
     URL.revokeObjectURL(url);
   };
-
-  // Copy state: "idle" | "copied" | "error". The button shows confirmation
-  // for 2 seconds after a successful copy, then resets. Two failure modes:
-  //   1. navigator.clipboard unavailable (insecure context / very old browser)
-  //   2. permission denied (rare in same-origin; user can deny via prompt)
-  // Both fall back to "error" state so the user knows something went wrong
-  // rather than silently losing the data.
-  const [copyState, setCopyState] = useState("idle");
-
   const copyBasketJson = async () => {
-    const json = JSON.stringify(buildBasketPayload(), null, 2);
     try {
       if (!navigator.clipboard) throw new Error("Clipboard API not available");
-      await navigator.clipboard.writeText(json);
-      setCopyState("copied");
-      setTimeout(() => setCopyState("idle"), 2000);
+      await navigator.clipboard.writeText(JSON.stringify(buildBasketPayload(), null, 2));
+      setCopyState("copied"); setTimeout(() => setCopyState("idle"), 2000);
     } catch (err) {
       console.warn("Clipboard copy failed:", err);
-      setCopyState("error");
-      setTimeout(() => setCopyState("idle"), 3000);
+      setCopyState("error"); setTimeout(() => setCopyState("idle"), 3000);
     }
   };
 
-  return basket.items.length > 0 ? (
-    <Section title={`Suggested next basket · ${basket.items.length} items`}
-      subtitle={basket.priced > 0
-        ? `${basket.counts.expiring} expiring · ${basket.counts.gap} gaps · ${basket.counts.leverage} leverage · est. ~£${basket.total.toFixed(2)}${basket.unpriced>0?` (${basket.unpriced} unpriced)`:""}`
-        : "Prices not available — no matches in order history"}
-      tone="accent" collapsible defaultOpen={false}
-      tip="Combines (1) pantry items expiring before the next delivery, (2) likely gaps from order history, and (3) high-leverage ingredients (each unlocks several recipes). Prices are medians from your past Tesco orders.">
-      {nextDelivery.date && <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-3 text-sm flex items-start gap-2">
-        <span className="text-base">🚚</span>
-        <div className="flex-1">
-          <div><strong>Suggested delivery: {formatDate(nextDelivery.date)}</strong> <span className="text-xs text-stone-500">· in {basket.daysToDelivery}d</span></div>
-          <div className="text-xs text-stone-600 mt-0.5">{nextDelivery.note}</div>
+  // Waste signal (2.6): per-item "expired uncooked in 2+ of last 3 cycles"
+  // needs per-cycle waste history, which the current schema doesn't retain
+  // (only the latest last_marked_action is stored, no event log). With <3
+  // cycles of waste data we MUST NOT show false positives — so this returns
+  // null today and lights up only once a waste-history source exists.
+  // TODO: populate from a waste-events log when one lands.
+  const wasteFlagFor = () => null;
+
+  // ----- Row renderer (shared across groups) -----
+  const markOpened = (b) => {
+    if (!b.tesco_sku) return;
+    setOpenedSkus(prev => prev.has(b.tesco_sku) ? prev : new Set(prev).add(b.tesco_sku));
+  };
+  const renderRow = (b, i) => {
+    const isOpened = b.tesco_sku && openedSkus.has(b.tesco_sku);
+    const qtyLabel = b.qty > 1 ? `${b.qty}×` : "1×";
+    const waste = wasteFlagFor(b);
+    return (
+      <div key={b.kind + ":" + b.name + ":" + i} className="grid grid-cols-12 gap-2 items-start px-3 py-2 text-sm border-t border-stone-100 first:border-t-0">
+        <div className="col-span-12 sm:col-span-6">
+          <div className="font-medium leading-tight flex items-center gap-1.5 flex-wrap">
+            {b.tesco_url ? (
+              <a href={b.tesco_url} target="_blank" rel="noopener noreferrer" onClick={() => markOpened(b)}
+                 className={`hover:underline ${isOpened ? "text-stone-500" : ""}`} title={`Open on Tesco: ${b.tesco_name || b.name}`}>
+                {b.name}{isOpened && <span className="ml-1 text-xs text-stone-400">✓</span>}
+              </a>
+            ) : (
+              <a href={b.tesco_search_url} target="_blank" rel="noopener noreferrer"
+                 className="text-stone-700 hover:underline" title={`Tesco search for "${b.name}" — no direct SKU yet, pick the product manually`}>
+                {b.name}
+              </a>
+            )}
+            {!b.tesco_url && <Chip tone="warn" title="No direct Tesco product yet — opens a search you complete manually">search</Chip>}
+            {b.khalil_critical && <Chip tone="danger" title="Khalil-critical — never substitute">⚠ no sub</Chip>}
+            {b.kind === "leverage" && b.unlockCount > 0 && <Chip tone="ok" title="Recipes this ingredient makes makeable">+{b.unlockCount} recipes</Chip>}
+            {b.manual && <Chip tone="info" title="You added this from the leverage table">added</Chip>}
+          </div>
+          {waste && <div className="mt-0.5"><Chip tone="warn" title="Wasted in recent cycles">{waste} — reduce qty?</Chip></div>}
         </div>
-      </div>}
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead><tr className="text-stone-500 text-xs uppercase tracking-wider">
-            <th className="text-left py-1.5 pr-2">Item</th>
-            <th className="text-left py-1.5 pr-2">Qty</th>
-            <th className="text-left py-1.5 pr-2">Why</th>
-            <th className="text-right py-1.5">Est. price</th>
-          </tr></thead>
-          <tbody>{basket.items.map((b, i) => {
-            const chipTone = b.kind === "expiring" ? "danger" : b.kind === "gap" ? "warn" : "info";
-            const chipLabel = b.kind === "expiring" ? "expiring" : b.kind === "gap" ? "gap" : "leverage";
-            const qtyLabel = b.qty > 1 ? `${b.qty}×` : "1×";
-            const sizeLabel = b.packSize || "pack";
-            // Per-row click handler: keep openedSkus in sync with "Open next"
-            // so the two flows don't get out of step. Browser handles the
-            // navigation via the anchor's href + target=_blank; we only
-            // update React state. No preventDefault — letting the link
-            // behave normally means cmd/ctrl-click opens in background tab
-            // as users expect.
-            const markOpened = () => {
-              if (!b.tesco_sku) return;
-              setOpenedSkus(prev => {
-                if (prev.has(b.tesco_sku)) return prev;
-                const next = new Set(prev);
-                next.add(b.tesco_sku);
-                return next;
-              });
-            };
-            const isOpened = b.tesco_sku && openedSkus.has(b.tesco_sku);
-            return <tr key={i} className="border-t border-stone-100 align-top">
-              <td className="py-2 pr-2">
-                <div className="font-medium leading-tight">
-                  {b.tesco_url ? (
-                    <a
-                      href={b.tesco_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      onClick={markOpened}
-                      className={`hover:underline ${isOpened ? "text-stone-500" : ""}`}
-                      title={`Open on Tesco: ${b.tesco_name || b.name}`}
-                    >
-                      {b.name}
-                      {isOpened && <span className="ml-1 text-xs text-stone-400">✓</span>}
-                    </a>
-                  ) : b.tesco_search_url ? (
-                    // No seeded SKU — fall back to a Tesco search link.
-                    // Visually distinct (dotted underline + 🔎) so the user
-                    // knows it lands on search results, not a product page.
-                    // Still counts toward openedSkus by name (since there's
-                    // no SKU) so the "Open next" flow advances past it.
-                    <a
-                      href={b.tesco_search_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-stone-700 hover:underline decoration-dotted underline-offset-2"
-                      style={{ textDecoration: "underline dotted", textUnderlineOffset: "2px" }}
-                      title={`Tesco search for "${b.name}" — pick the right product manually (no SKU mapped yet)`}
-                    >
-                      <span className="text-xs mr-0.5">🔎</span>{b.name}
-                    </a>
-                  ) : (
-                    <span>{b.name}</span>
-                  )}
-                </div>
-                <Chip tone={chipTone}>{chipLabel}</Chip>
-              </td>
-              <td className="py-2 pr-2">
-                <div className="mono whitespace-nowrap">{qtyLabel} {sizeLabel}</div>
-                {b.unitPrice != null && b.qty > 1 && <div className="text-[10px] text-stone-500 mono mt-0.5">@ £{b.unitPrice.toFixed(2)}/ea</div>}
-              </td>
-              <td className="py-2 pr-2 text-stone-700">
-                <div>{b.why}</div>
-                {b.whySub && <div className="text-xs text-stone-500 mt-0.5">{b.whySub}</div>}
-              </td>
-              <td className="py-2 text-right mono">
-                {b.totalPrice != null
-                  ? <span className={b.priceSource === "fuzzy" ? "text-stone-500" : ""}>
-                      {b.priceSource === "fuzzy" ? "~" : ""}£{b.totalPrice.toFixed(2)}
-                    </span>
-                  : <span className="text-stone-400">—</span>}
-              </td>
-            </tr>;
-          })}</tbody>
-          {basket.priced > 0 && <tfoot>
-            <tr className="border-t-2 border-stone-300 font-semibold">
-              <td className="py-2 pr-2" colSpan="3">Estimated total ({basket.priced} priced)</td>
-              <td className="py-2 text-right mono">£{basket.total.toFixed(2)}</td>
-            </tr>
-          </tfoot>}
-        </table>
+        <div className="col-span-4 sm:col-span-2 mono whitespace-nowrap text-xs">
+          {qtyLabel} {b.packSize || "pack"}
+          {b.unitPrice != null && b.qty > 1 && <div className="text-[10px] text-stone-500 mt-0.5">@ £{b.unitPrice.toFixed(2)}/ea</div>}
+        </div>
+        <div className="col-span-5 sm:col-span-2 text-stone-700 text-xs">
+          <div>{b.why}</div>
+          {b.whySub && <div className="text-stone-500 mt-0.5">{b.whySub}</div>}
+        </div>
+        <div className="col-span-2 sm:col-span-1 text-right mono text-xs">
+          {b.totalPrice != null
+            ? <span className={b.priceSource === "fuzzy" ? "text-stone-500" : ""}>{b.priceSource === "fuzzy" ? "~" : ""}£{b.totalPrice.toFixed(2)}</span>
+            : <span className="text-stone-400">—</span>}
+        </div>
+        <div className="col-span-1 text-right">
+          <button onClick={() => onRemoveItem && onRemoveItem(b.name)} title="Remove from this cycle's basket"
+            className="text-stone-400 hover:text-red-600 rounded" style={{ minWidth: 36, minHeight: 36 }}>×</button>
+        </div>
       </div>
+    );
+  };
 
-      {/* Basket actions: open in Tesco one-at-a-time + JSON export.
-          One-per-click is deliberate — browsers block popup bursts from a
-          single user gesture, and one-at-a-time keeps you reviewing each
-          product page as it opens. */}
-      <div className="mt-4 flex flex-wrap items-center gap-2">
-        {(() => {
-          // Total items with a Tesco URL — the denominator for the "X of N"
-          // progress display. Blocked items (needs_sku_lookup) are excluded
-          // from both numerator and denominator so the count stays honest.
-          const openableTotal = basket.items.filter(b => b.tesco_url).length;
-          const openedCount = openableTotal - openableItems.length;
-          if (openableItems.length > 0) {
-            return (
-              <button
-                onClick={openNext}
-                className="pill"
-                data-active="true"
-                title={`Opens "${openableItems[0].name}" in a new Tesco tab. One click = one tab.`}
-              >
-                🛒 Open next in Tesco: {openableItems[0].name}
-                <span className="text-stone-500 ml-1">· {openedCount + 1} of {openableTotal}</span>
-              </button>
-            );
-          }
-          if (openableTotal > 0) {
-            return (
-              <span className="text-sm text-stone-600">
-                ✓ All {openableTotal} openable items opened
-                <button onClick={resetOpened} className="pill ml-2" title="Clear the opened-items tracker so you can re-open from the top">Reset</button>
-              </span>
-            );
-          }
-          return null;
-        })()}
-
-        <button
-          onClick={downloadBasketJson}
-          className="pill"
-          title="Download the basket as JSON (for handing off to Claude in Chrome). Includes SKUs, URLs, Khalil-critical flags, and household never-substitute rules."
-        >
-          ⬇ Export JSON
-        </button>
-
-        <button
-          onClick={copyBasketJson}
-          className="pill"
-          data-active={copyState === "copied" ? "true" : undefined}
-          title="Copy the basket JSON to clipboard — paste straight into Claude in Chrome. Same payload as Export JSON."
-        >
-          {copyState === "copied" ? "✓ Copied" : copyState === "error" ? "✗ Copy failed" : "📋 Copy JSON"}
-        </button>
-
-        {blockedItems.length > 0 && (
-          <span
-            className="text-xs text-stone-600 bg-stone-100 border border-stone-200 rounded-full px-2 py-1"
-            title="These items don't have a seeded Tesco SKU yet — clicking the item name opens a Tesco search instead of a direct product page. Future seeding pass will replace search links with direct ones."
-          >
-            🔎 {blockedItems.length} via search
-          </span>
+  const renderGroup = (key) => {
+    const items = built[key];
+    const meta = GROUP_META[key];
+    const open = groupOpen[key];
+    const total = groupTotal(items);
+    if (key !== "expiring" && items.length === 0) return null; // keep expiring header for the bridge hint
+    return (
+      <div className={`rounded-lg border border-stone-200 ${meta.tint} overflow-hidden`}>
+        <div role="button" tabIndex={0}
+          onClick={() => setGroupOpen(g => ({ ...g, [key]: !g[key] }))}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setGroupOpen(g => ({ ...g, [key]: !g[key] })); } }}
+          className="flex items-center justify-between gap-2 px-3 py-2 cursor-pointer select-none">
+          <div className="text-sm font-semibold text-stone-800 flex items-center gap-1.5">
+            <span className="text-stone-400 text-xs w-3">{open ? "▼" : "▶"}</span>
+            <span>{meta.emoji} {meta.label}</span>
+            <span className="text-stone-500 font-normal">· {items.length} item{items.length === 1 ? "" : "s"}{total > 0 ? ` · £${total.toFixed(2)}` : ""}</span>
+            <InfoTip>{meta.tip}</InfoTip>
+          </div>
+        </div>
+        {open && (
+          <div className="bg-white/60">
+            {key === "expiring" && items.length === 0 && (
+              <div className="px-3 py-2 text-xs text-stone-600">
+                {untriagedExpired > 0
+                  ? <>Nothing to restock yet — {untriagedExpired} expired item{untriagedExpired === 1 ? "" : "s"} await triage on the <strong>Cook tab</strong> (mark Used / Binned / Still good first).</>
+                  : "Nothing expiring needs replacing right now."}
+              </div>
+            )}
+            {items.map(renderRow)}
+            {/* Refill regulars: the relocated drill-down (2.1) lives here. */}
+            {key === "gap" && gapAnalysis?.regulars && (
+              <RegularsDrawer
+                show={showRegulars} setShow={setShowRegulars}
+                filter={regFilter} setFilter={setRegFilter}
+                analysis={gapAnalysis} orderCount={receipts.length} minOrders={minOrders} />
+            )}
+          </div>
         )}
       </div>
+    );
+  };
 
-      <div className="text-xs text-stone-500 mt-3 leading-relaxed">
-        Quantities and pack sizes are based on what you typically order for this product. Prices are medians from your past Tesco orders and may not reflect current Tesco pricing. Fuzzy matches are marked with <span className="mono">~</span> and shown in lighter text. Unpriced items (<span className="mono">—</span>) had no match in order history. Item names with a dotted underline (<span className="mono">🔎</span>) link to a Tesco search rather than a direct product page — these don't have a seeded SKU yet, so pick the right product manually. Suggested delivery is calculated from your past order cadence.
+  if (allVisible.length === 0 && untriagedExpired === 0 && built.excluded.length === 0) return null;
+
+  return (
+    <Section title="Suggested next basket"
+      subtitle={pricedCount > 0
+        ? `${built.expiring.length} expiring · ${built.gap.length} regulars · ${built.leverage.length} leverage · est. ~£${grandTotal.toFixed(2)}`
+        : "Prices not available — no matches in order history"}
+      tone="accent"
+      tip="One basket grouped by reason: replace what you used/binned, refill regulars you're missing, and unlock recipes with high-leverage ingredients. Prices are medians from past Tesco orders.">
+
+      {/* Delivery banner + settings pill */}
+      <div className="flex items-start justify-between gap-2 flex-wrap mb-3">
+        {nextDelivery.date ? (
+          <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-sm flex items-start gap-2 flex-1 min-w-[220px]">
+            <span className="text-base">🚚</span>
+            <div className="flex-1">
+              <div><strong>Suggested delivery: {formatDate(nextDelivery.date)}</strong></div>
+              <div className="text-xs text-stone-600 mt-0.5">{nextDelivery.note}</div>
+            </div>
+          </div>
+        ) : <div />}
+        <div className="relative">
+          <button onClick={() => setShowSettings(s => !s)} className="pill" aria-expanded={showSettings}
+            title="Basket settings">⚙ regulars ≥{minOrders}</button>
+          {showSettings && (
+            <div className="absolute right-0 top-full mt-1 z-40 w-56 rounded-lg border border-stone-200 bg-white p-3 shadow-lg text-sm">
+              <label className="flex items-center gap-2">
+                <span className="text-stone-600">Min orders to count as a regular</span>
+              </label>
+              <select value={minOrders} onChange={e => setMinOrders && setMinOrders(parseInt(e.target.value))}
+                className="mt-1.5 border border-stone-300 rounded px-2 py-1 text-sm w-full">
+                {[2, 3, 4, 5].map(n => <option key={n} value={n}>{n} of {receipts.length}</option>)}
+              </select>
+              <p className="text-[11px] text-stone-500 mt-1.5">Higher = stricter definition of a regular purchase.</p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="space-y-2.5">
+        {renderGroup("expiring")}
+        {renderGroup("gap")}
+        {renderGroup("leverage")}
+      </div>
+
+      {/* Grand total */}
+      {pricedCount > 0 && (
+        <div className="flex justify-between items-baseline mt-3 pt-2 border-t-2 border-stone-300 text-sm font-semibold">
+          <span>Estimated total ({pricedCount} priced)</span>
+          <span className="mono">£{grandTotal.toFixed(2)}</span>
+        </div>
+      )}
+
+      {/* Excluded for this cycle */}
+      {built.excluded.length > 0 && (
+        <div className="mt-3 rounded-lg border border-stone-200 overflow-hidden">
+          <button onClick={() => setShowExcluded(s => !s)}
+            className="w-full flex items-center justify-between gap-2 px-3 py-2 text-sm text-stone-600 hover:bg-stone-50">
+            <span><span className="text-xs w-3 inline-block">{showExcluded ? "▼" : "▶"}</span> Excluded for this cycle · {built.excluded.length}</span>
+          </button>
+          {showExcluded && <div className="divide-y divide-stone-100">
+            {built.excluded.map((b, i) => (
+              <div key={i} className="flex items-center justify-between gap-2 px-3 py-1.5 text-sm">
+                <span className="text-stone-500 line-through">{b.name}</span>
+                <button onClick={() => onRestoreItem && onRestoreItem(b.name)} className="pill text-xs" title="Put back in the basket">↩ restore</button>
+              </div>
+            ))}
+          </div>}
+        </div>
+      )}
+
+      {/* Actions */}
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        {openableItems.length > 0 ? (
+          <button onClick={openNext} className="pill" data-active="true"
+            title={`Opens "${openableItems[0].name}" in a new Tesco tab. One click = one tab.`}>
+            🛒 Open next in Tesco: {openableItems[0].name}
+            <span className="text-stone-500 ml-1">· {directCount - openableItems.length + 1} of {directCount}</span>
+          </button>
+        ) : directCount > 0 ? (
+          <span className="text-sm text-stone-600">✓ All {directCount} direct items opened
+            <button onClick={resetOpened} className="pill ml-2" title="Clear the opened-items tracker">Reset</button>
+          </span>
+        ) : null}
+        <button onClick={downloadBasketJson} className="pill" title="Download the basket as JSON for the Claude-in-Chrome handoff.">⬇ Export JSON</button>
+        <button onClick={copyBasketJson} className="pill" data-active={copyState === "copied" ? "true" : undefined}
+          title="Copy the basket JSON to clipboard.">
+          {copyState === "copied" ? "✓ Copied" : copyState === "error" ? "✗ Copy failed" : "📋 Copy JSON"}
+        </button>
+        {/* Direct-SKU vs search clarity (2.8) */}
+        <span className="text-xs text-stone-600 bg-stone-100 border border-stone-200 rounded-full px-2 py-1 flex items-center gap-1"
+          title="Direct = one-tap add on Tesco. Search = no SKU mapped yet, so you pick the product manually on Tesco.">
+          {directCount} direct · {searchCount} search <InfoTip>Items tagged “search” open a Tesco search rather than a product page — no SKU is mapped yet, so confirm the right product manually.</InfoTip>
+        </span>
+      </div>
+
+      <div className="text-xs text-stone-600 mt-3 leading-relaxed">
+        Quantities and pack sizes are based on what you typically order. Prices are medians from past Tesco orders and may not reflect current pricing; fuzzy matches show a <span className="mono">~</span> in lighter text and unpriced items show <span className="mono">—</span>. Items tagged <Chip tone="warn">search</Chip> need manual product selection on Tesco. Suggested delivery is from your past order cadence.
       </div>
     </Section>
-  ) : null;
+  );
+}
+
+// RegularsDrawer — the relocated "Pick your basket gaps" diagnostic (2.1).
+// Lives inside the Refill regulars group as a collapsed drawer; the four
+// status filters move here from the now-deleted standalone section.
+function RegularsDrawer({ show, setShow, filter, setFilter, analysis, orderCount, minOrders }) {
+  const regulars = analysis.regulars || [];
+  const gaps = analysis.gaps || [];
+  const restocked = regulars.filter(r => r.inLatest || r.pantryItem);
+  const excluded = regulars.filter(r => r.excludedReason);
+  const rows = filter === "gap" ? gaps : filter === "restocked" ? restocked : filter === "excluded" ? excluded : regulars;
+  return (
+    <div className="border-t border-stone-200 bg-stone-50/60">
+      <button onClick={() => setShow(!show)} className="w-full text-left px-3 py-1.5 text-xs text-stone-600 hover:text-stone-900">
+        <span className="w-3 inline-block">{show ? "▼" : "▶"}</span> All regulars (diagnostic) · {regulars.length} from {orderCount} orders
+      </button>
+      {show && (
+        <div className="px-3 pb-3">
+          <div className="flex flex-wrap gap-1 mb-2">
+            <button onClick={() => setFilter("gap")} className="pill text-xs" data-active={filter === "gap"} title="Regular, missing from latest order + pantry">Real gaps · {gaps.length}</button>
+            <button onClick={() => setFilter("restocked")} className="pill text-xs" data-active={filter === "restocked"} title="In latest order or pantry — no action">Restocked · {restocked.length}</button>
+            <button onClick={() => setFilter("excluded")} className="pill text-xs" data-active={filter === "excluded"} title="Filtered by a household rule">Excluded · {excluded.length}</button>
+            <button onClick={() => setFilter("all")} className="pill text-xs" data-active={filter === "all"} title="Every regular">All · {regulars.length}</button>
+          </div>
+          {rows.length === 0 ? <div className="text-xs text-stone-500">Nothing here at ≥{minOrders} orders.</div>
+            : <div className="max-h-56 overflow-y-auto divide-y divide-stone-100 text-xs">
+              {rows.map((r, i) => (
+                <div key={i} className="flex items-center justify-between gap-2 py-1">
+                  <span className="text-stone-700 truncate">{r.example} <span className="text-stone-400 mono">×{r.count}</span></span>
+                  <span className="shrink-0">
+                    {r.inLatest ? <Chip tone="ok">✓ latest</Chip>
+                      : r.pantryItem ? <Chip tone="ok">in pantry</Chip>
+                        : r.excludedReason ? <span className="text-stone-500">{r.excludedReason}</span>
+                          : <Chip tone="warn">gap</Chip>}
+                  </span>
+                </div>
+              ))}
+            </div>}
+        </div>
+      )}
+    </div>
+  );
 }

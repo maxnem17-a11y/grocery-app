@@ -94,8 +94,36 @@ export function isNoiseRecipe(r) {
   return tags.some(t => NOISE_TAGS.has(String(t).toLowerCase()));
 }
 
+// ============================================================
+// Ingredient-name normalisation (Basket overhaul 2.5)
+// ============================================================
+// Collapse spelling/case/qualifier/plural variants so the leverage
+// ranking shows ONE row per real ingredient ("ginger" + "fresh ginger"
+// + "Fresh Ginger" → "ginger"; "spring onion" + "Spring onions" →
+// "spring onion"). Lowercase + strip parentheticals + drop a few leading
+// qualifiers + singularise the last word. Deliberately simple — it's a
+// display/grouping key, not a linguistic engine.
+function singularize(w) {
+  if (/(ses|xes|zes|ches|shes)$/.test(w)) return w.slice(0, -2);
+  if (/ies$/.test(w) && w.length > 4) return w.slice(0, -3) + "y";
+  if (/oes$/.test(w)) return w.slice(0, -2);            // tomatoes→tomato
+  if (/s$/.test(w) && !/ss$/.test(w) && w.length > 3) return w.slice(0, -1);
+  return w;
+}
+export function normalizeIngredientName(name) {
+  let s = lc(name || "").trim();
+  s = s.replace(/\s*\(.*?\)\s*/g, " ").trim();
+  s = s.replace(/^(fresh|dried|ground|whole|raw|free-range|organic)\s+/, "");
+  s = s.replace(/\s+/g, " ").trim();
+  if (!s) return s;
+  const parts = s.split(" ");
+  parts[parts.length - 1] = singularize(parts[parts.length - 1]);
+  return parts.join(" ");
+}
+
 // leverageScore — verbatim port of canonical L1196–1246. Appended in
-// step 7j-1 alongside SuggestedBasket extraction.
+// step 7j-1 alongside SuggestedBasket extraction. 2.5: rows now grouped
+// by normalizeIngredientName so spelling/plural variants merge into one.
 //
 // For each missing ingredient across all not-yet-makeable recipes
 // (baseline pct < 70), list every recipe it appears in and the
@@ -116,19 +144,21 @@ export function leverageScore(recipes, matchSet, limit) {
     if (baseline[idx] >= 70) return; // recipe already makeable; skip
     const m = makeability(r, matchSet);
     // Unique missing keys for this recipe
-    const missingKeys = new Set();
+    const missingKeys = new Set(); // normalised — dedupe variants within a recipe
     for (const i of m.missing) {
-      const mm = (i.pantry_match || i.item || "").toLowerCase().trim();
-      const cm = mm.replace(/\s*\(.*?\)\s*/g, "").trim();
+      const raw = i.pantry_match || i.item || "";
+      const cm = raw.toLowerCase().trim().replace(/\s*\(.*?\)\s*/g, "").trim();
       if (!cm) continue;
-      if (missingKeys.has(cm)) continue;
-      missingKeys.add(cm);
-      const label = i.pantry_match || i.item;
-      // Compute the after-% if we had this ingredient
+      const nk = normalizeIngredientName(raw);
+      if (!nk || missingKeys.has(nk)) continue;
+      missingKeys.add(nk);
+      // Compute the after-% if we had this ingredient. Add the recipe's OWN
+      // cleaned form (cm) — that's what makeability matches against — not the
+      // normalised key (which may have been singularised away from the match).
       const augmented = new Set(matchSet); augmented.add(cm);
       const after = makeability(r, augmented).pct;
-      if (!ingMap.has(cm)) ingMap.set(cm, { label, recipes: [] });
-      ingMap.get(cm).recipes.push({
+      if (!ingMap.has(nk)) ingMap.set(nk, { label: nk, recipes: [] });
+      ingMap.get(nk).recipes.push({
         name: r.name,
         before: baseline[idx],
         after,

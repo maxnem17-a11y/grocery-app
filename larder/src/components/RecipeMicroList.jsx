@@ -20,12 +20,14 @@
 import { useState } from "react";
 import { AudienceTag, Chip, EaterTile } from "./primitives.jsx";
 
-export default function RecipeMicroList({ items }) {
+export default function RecipeMicroList({ items, onMarkCooked, cookedSet, cookedSyncErrors }) {
   const [expanded, setExpanded] = useState(null);
   return <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
     {items.map(r => {
       const total = (r.prep_time_mins || 0) + (r.cook_time_mins || 0);
       const open = expanded === r.id;
+      const isCooked = cookedSet ? cookedSet.has(r.id) : false;
+      const cookErr = cookedSyncErrors ? cookedSyncErrors[r.id] : null;
       const sourceLabel = r.source && r.source.type === "book"
         ? `${r.source.title || "Book"}${r.source.page ? ` p.${r.source.page}` : ""}`
         : (r._source_file || "");
@@ -36,8 +38,19 @@ export default function RecipeMicroList({ items }) {
              className="px-3 py-2.5 cursor-pointer select-none">
           <div className="font-medium leading-tight flex items-start justify-between gap-2">
             <span>{r.name}</span>
-            <span className="text-xs text-stone-400 shrink-0">{open ? '▲' : '▼'}</span>
+            <div className="flex items-center gap-1.5 shrink-0">
+              {/* Row-level Mark cooked (1.8) — stopPropagation so it doesn't toggle the card. */}
+              {onMarkCooked && <button
+                onClick={(e) => { e.stopPropagation(); onMarkCooked(r); }}
+                className={"rounded-md border px-2 text-[11px] font-medium leading-none " +
+                  (isCooked ? "border-emerald-600 bg-emerald-600 text-white" : "border-emerald-600 text-emerald-700 hover:bg-emerald-50")}
+                style={{ minHeight: 36 }}
+                title={isCooked ? "Marked cooked — tap to undo" : "Mark cooked"}
+              >{isCooked ? "✓ Cooked" : "Mark cooked"}</button>}
+              <span className="text-xs text-stone-400">{open ? '▲' : '▼'}</span>
+            </div>
           </div>
+          {cookErr && <div className="text-[10px] text-red-600 mt-0.5">{cookErr}</div>}
           <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
             <AudienceTag a={r._audience}/>
             <Chip tone="neutral">{r._make.pct}% have</Chip>

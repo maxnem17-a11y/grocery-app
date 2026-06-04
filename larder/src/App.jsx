@@ -104,6 +104,9 @@ function AppInner() {
   // Eater-filter state for RecipesView (step 7i). App-scope so it
   // persists across tab switches — matches canonical L5550.
   const [eaterFilter, setEaterFilter] = useState("all");
+  // Recipes-tab search query — lifted to App so the Basket tab's leverage
+  // rows can deep-link into a recipe by prefilling the search (2.4d).
+  const [recipeQuery, setRecipeQuery] = useState("");
 
   // Help banner — closed by default; opens when the user clicks the
   // "? Help" pill rendered in LarderBrand's style-toggle row.
@@ -785,6 +788,8 @@ function AppInner() {
       eaterFilter={eaterFilter}
       setEaterFilter={setEaterFilter}
       cookedSyncErrors={cookedSyncErrors}
+      recipeQuery={recipeQuery}
+      setRecipeQuery={setRecipeQuery}
     />}
     {tab === "pantry" && <PantryView
       pantry={pantry}
@@ -799,6 +804,7 @@ function AppInner() {
     {tab === "gaps" && <GapsView
       pantry={pantry}
       outOfStock={outOfStock}
+      goToRecipe={(name) => { setRecipeQuery(name); setTab("recipes"); }}
     />}
     {tab === "tesco" && <OrdersView pantry={pantry} applyReplenishment={applyReplenishment} />}
     {tab === "audit" && <AuditView

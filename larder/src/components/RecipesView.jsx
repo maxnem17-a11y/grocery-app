@@ -44,8 +44,12 @@ import { lc } from "../lib/text.js";
 import { useAllergens } from "../contexts/AllergensContext.jsx";
 import { useRecipes } from "../contexts/RecipesContext.jsx";
 
-export default function RecipesView({pantry, outOfStock, cooked, addCooked, eaterFilter, setEaterFilter, cookedSyncErrors}){
-  const [q, setQ] = useState("");
+export default function RecipesView({pantry, outOfStock, cooked, addCooked, eaterFilter, setEaterFilter, cookedSyncErrors, recipeQuery, setRecipeQuery}){
+  // Search query is controlled by App when provided (so the Basket tab's
+  // leverage rows can deep-link by prefilling it — 2.4d), else local.
+  const [qLocal, setQLocal] = useState("");
+  const q = recipeQuery !== undefined ? recipeQuery : qLocal;
+  const setQ = setRecipeQuery || setQLocal;
   const [source, setSource] = useState("all");
   const [sortBy, setSortBy] = useState("makeable");
   const [minMakeable, setMinMakeable] = useState(0);

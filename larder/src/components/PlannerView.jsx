@@ -53,6 +53,11 @@ export default function PlannerView({ pantry, outOfStock, cooked, addCooked, coo
   const { recipes, version } = useRecipes();
   const [eatAll, setEatAll] = useState(false);
 
+  // Set of recipe ids already in the cooked log — drives the row-level
+  // "Mark cooked" / "✓ Cooked" toggle state on every recipe card (1.8).
+  const cookedSet = useMemo(() => new Set((cooked || []).map(c => c.meal_id)), [cooked]);
+  const cardCookProps = { onMarkCooked: addCooked, cookedSet, cookedSyncErrors };
+
   const matchSet = useMemo(() => pantryMatchSet(pantry, outOfStock), [pantry, outOfStock]);
   const decorated = useMemo(() => recipes.map(r => {
     const m = makeability(r, matchSet);
@@ -179,7 +184,7 @@ export default function PlannerView({ pantry, outOfStock, cooked, addCooked, coo
       <Section title={`Everybody eats · ${everybody.length}`} tone="ok"
         subtitle="Whole-household-safe, ranked by what you already have" collapsible defaultOpen
         tip="Recipes safe for everyone (Max, Emily, and Khalil), ranked by how much of the ingredient list you already have in the pantry. Excludes condiments, drinks and long cooks.">
-        <RecipeMicroList items={everyShown} />
+        <RecipeMicroList items={everyShown} {...cardCookProps} />
         {everybody.length > 3 && (
           <div className="mt-2">
             <button className="text-xs text-stone-600 hover:text-stone-900 underline"
@@ -195,13 +200,13 @@ export default function PlannerView({ pantry, outOfStock, cooked, addCooked, coo
       <Section title={`Gains · ${gains.length}`} tone="info"
         subtitle="High-protein options (≥20g/serving), pescatarian-safe" collapsible defaultOpen={false}
         tip="Recipes Max can eat (no meat) with a recorded protein of at least 20g per serving — useful for training days. Sorted by protein, highest first. Recipes with no protein data are excluded.">
-        <RecipeMicroList items={gains} />
+        <RecipeMicroList items={gains} {...cardCookProps} />
       </Section>
 
       <Section title={`Quick wins · ${quickWins.length}`} tone="accent"
         subtitle="Eat in under 25 minutes, at least half in-pantry" collapsible defaultOpen={false}
         tip="Fast meals (prep + cook ≤25 min) where you already have at least half the ingredients. Excludes condiments, drinks and long cooks.">
-        <RecipeMicroList items={quickWins} />
+        <RecipeMicroList items={quickWins} {...cardCookProps} />
       </Section>
 
       {cooked.length > 0 && (
