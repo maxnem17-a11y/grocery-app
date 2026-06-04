@@ -46,6 +46,7 @@ export default function GapsView({ pantry, outOfStock, goToRecipe }) {
 
   const [minOrders, setMinOrders] = useState(3);
   const [leverageLimit, setLeverageLimit] = useState(15);
+  const [showKpis, setShowKpis] = useState(false); // KPI strip hidden by default
   // Shared, lifted state.
   const [addedIngredients, setAddedIngredients] = useState(() => new Set());
   const [excludedItems, setExcludedItems] = useState(() => new Set());
@@ -94,12 +95,19 @@ export default function GapsView({ pantry, outOfStock, goToRecipe }) {
   }
 
   return <div className="space-y-5">
-    <div className="grid grid-cols-2 gap-3">
-      <Stat label={`Regulars (≥${minOrders})`} value={analysis.regulars.length}
-        tip={`Items appearing in at least ${minOrders} of ${analysis.orderCount} parsed Tesco orders. Adjust via the ⚙ settings pill on the basket.`} />
-      <Stat label="Real gaps" value={analysis.gaps.length} tone={analysis.gaps.length > 0 ? "warn" : "ok"}
-        sub="Not in latest order, not in pantry" tipAlign="right"
-        tip={`Items you buy regularly that aren't in your latest delivery (#${analysis.latest.order_number}, ${formatDate(analysis.latest.delivery_date)}) and aren't in the pantry. Excludes ${analysis.excluded.length} item(s) ruled out by ${(HOUSEHOLD_RULES.never_restock || []).length} household never-restock rule(s). This count feeds the basket's "Refill regulars" group — that group may show fewer if some gaps were removed this cycle or merged into "Replace what's expiring".`} />
+    <div>
+      <button onClick={() => setShowKpis(s => !s)}
+        className="text-xs text-stone-600 hover:text-stone-900 flex items-center gap-1"
+        aria-expanded={showKpis}>
+        <span className="w-3 inline-block">{showKpis ? "▼" : "▶"}</span>{showKpis ? "Hide stats" : "Show stats"}
+      </button>
+      {showKpis && <div className="grid grid-cols-2 gap-3 mt-2">
+        <Stat label={`Regulars (≥${minOrders})`} value={analysis.regulars.length}
+          tip={`Items appearing in at least ${minOrders} of ${analysis.orderCount} parsed Tesco orders. Adjust via the ⚙ settings pill on the basket.`} />
+        <Stat label="Real gaps" value={analysis.gaps.length} tone={analysis.gaps.length > 0 ? "warn" : "ok"}
+          sub="Not in latest order, not in pantry" tipAlign="right"
+          tip={`Items you buy regularly that aren't in your latest delivery (#${analysis.latest.order_number}, ${formatDate(analysis.latest.delivery_date)}) and aren't in the pantry. Excludes ${analysis.excluded.length} item(s) ruled out by ${(HOUSEHOLD_RULES.never_restock || []).length} household never-restock rule(s). This count feeds the basket's "Refill regulars" group — that group may show fewer if some gaps were removed this cycle or merged into "Replace what's expiring".`} />
+      </div>}
     </div>
 
     <SuggestedBasket

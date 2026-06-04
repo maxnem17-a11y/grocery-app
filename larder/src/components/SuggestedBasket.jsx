@@ -51,9 +51,19 @@ import { useReceipts } from "../contexts/ReceiptsContext.jsx";
 import { useRecipes } from "../contexts/RecipesContext.jsx";
 import { useTescoSkus } from "../contexts/TescoSkusContext.jsx";
 
+// Expiry "why" text + chip tone, per the cross-cutting expiry-formatting
+// convention shared with the Cook tab.
+function expiryWhy(d, daysToDelivery) {
+  if (d < 0) return `expired ${Math.abs(d)}d ago — restock`;
+  if (d === 0) return "expires today";
+  if (d <= 2) return daysToDelivery > d ? `expires in ${d}d (by delivery)` : `expires in ${d}d`;
+  return `expires in ${d}d`;
+}
+function dayChipTone(d) { return d <= 2 ? "danger" : d <= 5 ? "warn" : "neutral"; }
+
 const GROUP_META = {
   expiring: { emoji: "🔴", label: "Replace what's expiring", tint: "border-l-4 border-l-red-400 bg-red-50/30",
-    tip: "Items you marked Used or Binned on the Cook tab banner. Items marked \"Still good\" are suppressed — triage expiry on the Cook tab first." },
+    tip: "Two kinds: items you already marked Used/Binned on the Cook banner (actually gone), and in-stock items projected to expire by the next suggested delivery. Items marked \"Still good\" are suppressed; already-expired items still in stock are triaged on the Cook tab first." },
   gap: { emoji: "🟡", label: "Refill regulars", tint: "border-l-4 border-l-amber-400 bg-amber-50/30",
     tip: "Items you buy regularly that are missing from both your latest order and the pantry." },
   leverage: { emoji: "🟢", label: "Unlock recipes", tint: "border-l-4 border-l-emerald-400 bg-emerald-50/30",
@@ -119,7 +129,14 @@ export default function SuggestedBasket({ pantry, outOfStock, minOrders = 3, set
     const exp = [], gaps = [], lev = [];
     const excl = excludedItems;
 
-    // A) Replace what's expiring — items triaged Used/Binned on the Cook banner.
+    // Days until the next suggested delivery — items expiring within this
+    // window need replacing before the shop lands.
+    const daysToDelivery = nextDelivery.date
+      ? Math.max(1, Math.round((new Date(nextDelivery.date + "T12:00:00Z") - TODAY) / (1000 * 60 * 60 * 24)))
+      : 7;
+
+    // A1) ACTUALLY EXPIRED — items the user marked Used/Binned on the Cook
+    // banner. These are gone; restock them. expiryKind="expired".
     const triaged = pantry
       .filter(p => p._last_marked_action === "used" || p._last_marked_action === "binned")
       .filter(p => !neverRestockReason(p.item, skuIndex));
@@ -129,6 +146,29 @@ export default function SuggestedBasket({ pantry, outOfStock, minOrders = 3, set
       seen.add(key);
       const it = buildItem(p.item, "expiring", `${p._last_marked_action} — restock`, p.expires ? `was due ${formatDate(p.expires)}` : null);
       it.action = p._last_marked_action;
+      it.expiryKind = "expired";
+      exp.push(it);
+    }
+
+    // A2) PROJECTED TO EXPIRE BY DELIVERY — in-stock items not yet expired
+    // whose expiry falls on/before the next suggested delivery. Distinct from
+    // A1 (still in the pantry, just won't last). "Still good" suppresses an
+    // item (its expiry was bumped, so it usually falls out of the window
+    // anyway, but exclude explicitly to honour the Cook-tab suppression).
+    const projected = pantry
+      .filter(p => !outOfStock.has(p.item))
+      .filter(p => p._last_marked_action !== "still_good")
+      .filter(p => !neverRestockReason(p.item, skuIndex))
+      .map(p => ({ ...p, _dExp: daysUntilExpiry(p) }))
+      .filter(p => p._dExp !== null && p._dExp >= 0 && p._dExp <= daysToDelivery)
+      .sort((a, b) => a._dExp - b._dExp);
+    for (const p of projected) {
+      const key = lc(p.item);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const it = buildItem(p.item, "expiring", expiryWhy(p._dExp, daysToDelivery), p.expires ? `expires ${formatDate(p.expires)}` : null);
+      it.expiryKind = "projected";
+      it.dExp = p._dExp;
       exp.push(it);
     }
 
@@ -173,7 +213,7 @@ export default function SuggestedBasket({ pantry, outOfStock, minOrders = 3, set
       expiring: keep(exp), gap: keep(gaps), leverage: keep(lev),
       excluded: all.filter(x => excl.has(lc(x.name))),
     };
-  }, [pantry, outOfStock, gapAnalysis, leverage, addedIngredients, excludedItems, skuIndex, buildItem]);
+  }, [pantry, outOfStock, gapAnalysis, leverage, addedIngredients, excludedItems, skuIndex, buildItem, nextDelivery]);
 
   const groupTotal = (arr) => arr.reduce((s, x) => s + (x.totalPrice || 0), 0);
   const allVisible = [...built.expiring, ...built.gap, ...built.leverage];
@@ -272,6 +312,8 @@ export default function SuggestedBasket({ pantry, outOfStock, minOrders = 3, set
                 {b.name}
               </a>
             )}
+            {b.expiryKind === "expired" && <Chip tone="danger" title="You marked this Used/Binned on the Cook tab — restock">expired</Chip>}
+            {b.expiryKind === "projected" && <Chip tone={dayChipTone(b.dExp)} title="In stock, projected to expire by your next delivery">{b.dExp === 0 ? "today" : `in ${b.dExp}d`}</Chip>}
             {!b.tesco_url && <Chip tone="warn" title="No direct Tesco product yet — opens a search you complete manually">search</Chip>}
             {b.khalil_critical && <Chip tone="danger" title="Khalil-critical — never substitute">⚠ no sub</Chip>}
             {b.kind === "leverage" && b.unlockCount > 0 && <Chip tone="ok" title="Recipes this ingredient makes makeable">+{b.unlockCount} recipes</Chip>}
@@ -321,14 +363,26 @@ export default function SuggestedBasket({ pantry, outOfStock, minOrders = 3, set
         </div>
         {open && (
           <div className="bg-white/60">
-            {key === "expiring" && items.length === 0 && (
-              <div className="px-3 py-2 text-xs text-stone-600">
-                {untriagedExpired > 0
-                  ? <>Nothing to restock yet — {untriagedExpired} expired item{untriagedExpired === 1 ? "" : "s"} await triage on the <strong>Cook tab</strong> (mark Used / Binned / Still good first).</>
-                  : "Nothing expiring needs replacing right now."}
-              </div>
-            )}
-            {items.map(renderRow)}
+            {key === "expiring" ? (() => {
+              const expired = items.filter(x => x.expiryKind === "expired");
+              const projected = items.filter(x => x.expiryKind === "projected");
+              return <>
+                {items.length === 0 && (
+                  <div className="px-3 py-2 text-xs text-stone-600">
+                    {untriagedExpired > 0
+                      ? <>Nothing to restock yet — {untriagedExpired} expired item{untriagedExpired === 1 ? "" : "s"} await triage on the <strong>Cook tab</strong> (mark Used / Binned / Still good first).</>
+                      : "Nothing expiring needs replacing right now."}
+                  </div>
+                )}
+                {expired.length > 0 && <div className="px-3 pt-2 pb-0.5 text-[10px] uppercase tracking-wider text-stone-500">Already expired · {expired.length}</div>}
+                {expired.map(renderRow)}
+                {projected.length > 0 && <div className="px-3 pt-2 pb-0.5 text-[10px] uppercase tracking-wider text-stone-500">Expiring before delivery · {projected.length}</div>}
+                {projected.map(renderRow)}
+                {untriagedExpired > 0 && items.length > 0 && (
+                  <div className="px-3 py-1.5 text-[11px] text-stone-500">+ {untriagedExpired} expired item{untriagedExpired === 1 ? "" : "s"} still in stock — triage on the Cook tab.</div>
+                )}
+              </>;
+            })() : items.map(renderRow)}
             {/* Refill regulars: the relocated drill-down (2.1) lives here. */}
             {key === "gap" && gapAnalysis?.regulars && (
               <RegularsDrawer
