@@ -22,23 +22,43 @@
 //                                 consumer landed: RecipesView)
 // ============================================================
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export function InfoTip({ children, align = "center" }) {
-  // children = the explanatory text. Renders a small ⓘ icon; reveals on hover/focus.
+  // children = the explanatory text. Renders a small ⓘ icon. Reveals on
+  // hover/focus (CSS, unchanged for desktop) AND on tap/click — the trigger
+  // toggles an `open` state, sets aria-expanded, force-shows the bubble, and
+  // closes on outside-tap / Escape. This makes tooltips usable on touch
+  // devices where hover doesn't exist.
   // align: "center" (default, bubble above & centered), "right" (above, right-anchored),
   // "below" (below & centered — use inside overflow-hidden containers like table headers),
   // "below-right" (below & right-anchored — for tips in the rightmost columns).
   // stopPropagation on click/keyDown so the trigger doesn't fire parent click handlers
   // (e.g. when nested inside a sortable column header — clicking the ⓘ should NOT sort).
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("touchstart", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("touchstart", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
   const cls = "infotip-bubble"
     + (align === "right" ? " right" : "")
     + (align === "below" ? " below" : "")
     + (align === "below-right" ? " below right" : "");
   const stop = (e) => { e.stopPropagation(); };
-  return <span className="infotip" onClick={stop} onKeyDown={stop}>
-    <button type="button" tabIndex={0} className="infotip-trigger" aria-label="More info" onClick={stop}>i</button>
-    <span className={cls} role="tooltip">{children}</span>
+  const toggle = (e) => { e.stopPropagation(); setOpen(o => !o); };
+  return <span className="infotip" ref={ref} onClick={stop} onKeyDown={stop}>
+    <button type="button" tabIndex={0} className="infotip-trigger" aria-label="More info" aria-expanded={open} onClick={toggle}>i</button>
+    <span className={cls} role="tooltip" style={open ? { opacity: 1, pointerEvents: "auto" } : undefined}>{children}</span>
   </span>;
 }
 
@@ -142,7 +162,7 @@ export function Section({ title, subtitle, tone, children, collapsible = false, 
         <span>{title}</span>
         {tip && <InfoTip>{tip}</InfoTip>}
       </h3>
-      {subtitle && <span className="text-xs text-stone-500">{subtitle}</span>}
+      {subtitle && <span className="text-xs text-stone-600">{subtitle}</span>}
     </div>
     {isOpen && children}
   </div>;

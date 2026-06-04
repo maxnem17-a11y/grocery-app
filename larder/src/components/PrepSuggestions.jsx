@@ -35,7 +35,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Section } from "./primitives.jsx";
 import { extractPrepGroups } from "../lib/recipe-match.js";
 
-export default function PrepSuggestions({ recipes, pantry, outOfStock, initialGroups = 6, defaultMinMakeable = 60 }) {
+export default function PrepSuggestions({ recipes, pantry, outOfStock, initialGroups = 6, defaultMinMakeable = 60, defaultOpen = false }) {
   // `reroll` reshuffles the recipe order on demand (E1). The shuffle is
   // otherwise stable across unrelated re-renders because it's memoised.
   const [reroll, setReroll] = useState(0);
@@ -68,7 +68,7 @@ export default function PrepSuggestions({ recipes, pantry, outOfStock, initialGr
   const remaining = groups.length - shown.length;
 
   return <Section title="Got 5 mins? — Prep-ahead suggestions" tone="accent"
-    subtitle="Small mise-en-place tasks you could knock off now to get ahead, grouped by recipe" collapsible defaultOpen={false}
+    subtitle="Small mise-en-place tasks you could knock off now to get ahead, grouped by recipe" collapsible defaultOpen={defaultOpen}
     tip="Quick prep steps drawn from recipes you can currently make, grouped by dish. Use the slider to widen or narrow by how much of each recipe you already have. Show more reveals further recipes; Refresh reshuffles.">
     <div className="flex flex-wrap gap-2 mb-2 items-center justify-between">
       <label className="text-xs text-stone-600 flex items-center gap-1" title="Only show prep for recipes you already have at least this percentage of ingredients for">

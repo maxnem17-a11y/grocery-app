@@ -311,6 +311,10 @@ export function mapPantryRow(row) {
     // ISO date string (YYYY-MM-DD) of when the item was moved to the freezer.
     // Null when _in_freezer is false, or when the row predates this column.
     _frozen_at: row.frozen_at || null,
+    // Most recent "Use today or bin" banner action: still_good | used | binned
+    // (null until the item is ever marked). Persisted so waste (used vs binned)
+    // can be computed later; the banner itself only reads expiry/out_of_stock.
+    _last_marked_action: row.last_marked_action || null,
   };
 }
 

@@ -11,7 +11,7 @@ import {
   patchPantryRow,
 } from "./lib/supabase.js";
 import { suggestNextDelivery } from "./lib/delivery.js";
-import { computeExpires } from "./lib/pantry-math.js";
+import { addDays, computeExpires } from "./lib/pantry-math.js";
 import PantryView from "./components/PantryView.jsx";
 import AuditView from "./components/AuditView.jsx";
 import PlannerView from "./components/PlannerView.jsx";
@@ -19,7 +19,7 @@ import RecipesView from "./components/RecipesView.jsx";
 import GapsView from "./components/GapsView.jsx";
 import OrdersView from "./components/OrdersView.jsx";
 import LarderBrand from "./components/LarderBrand.jsx";
-import LarderFooter from "./components/LarderFooter.jsx";
+import ExpiredBanner from "./components/ExpiredBanner.jsx";
 import TabIcon from "./components/TabIcon.jsx";
 import { HelpBanner } from "./components/primitives.jsx";
 import { ReceiptsProvider, useReceipts } from "./contexts/ReceiptsContext.jsx";
@@ -115,6 +115,9 @@ function AppInner() {
     setShowHelpBanner(false);
     try { localStorage.setItem("grocery-intelligence-v1:help-dismissed", "1"); } catch {}
   }, []);
+
+  // "Use today or bin" banner — session-dismiss only (re-shows next load).
+  const [bannerDismissed, setBannerDismissed] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
@@ -276,6 +279,61 @@ function AppInner() {
           if (wasOut) next.add(itemName); else next.delete(itemName);
           return next;
         });
+        setItemSyncError(itemName, "Couldn't save — tap again to retry");
+      });
+  }, [outOfStock, findRowByItem, setItemSyncError]);
+
+  // ===== "Use today or bin" banner action =====
+  // Resolve an expired pantry item from the ExpiredBanner. Mirrors
+  // toggleOutOfStock's optimistic-PATCH-rollback pattern.
+  //   still_good — push expires to today+3 (a 3-day grace that also moves
+  //                the item out of the expired banner and into the "Going
+  //                soon" rail). Persists last_marked_action='still_good'.
+  //   used / binned — flag out_of_stock=true (drops it from the banner).
+  //                Both are functionally identical today; the distinction
+  //                is persisted (last_marked_action) for future waste
+  //                analytics — used = eaten, binned = thrown away.
+  const markItemAction = useCallback((itemName, action) => {
+    const row = findRowByItem(itemName);
+    if (!row) return;
+    const nowIso = new Date().toISOString();
+    setItemSyncError(itemName, null);
+
+    if (action === "still_good") {
+      const todayIso = new Date().toISOString().slice(0, 10);
+      const newExpires = addDays(todayIso, 3);
+      const priorExpires = row.expires;
+      const priorMarked = row._last_marked_action;
+      // Optimistic: bump expires + record the action on the row.
+      setPantry(prev => prev.map(p => p.id === row.id
+        ? { ...p, expires: newExpires, _last_marked_action: "still_good" } : p));
+      patchPantryRow(row.id, { expires: newExpires, last_marked_action: "still_good", last_marked_at: nowIso })
+        .catch(err => {
+          console.error(`Failed to mark "${itemName}" still good:`, err);
+          setPantry(prev => prev.map(p => p.id === row.id
+            ? { ...p, expires: priorExpires, _last_marked_action: priorMarked } : p));
+          setItemSyncError(itemName, "Couldn't save — tap again to retry");
+        });
+      return;
+    }
+
+    // used | binned → out of stock
+    const wasOut = outOfStock.has(itemName);
+    const priorMarked = row._last_marked_action;
+    setOutOfStock(prev => { const next = new Set(prev); next.add(itemName); return next; });
+    setPantry(prev => prev.map(p => p.id === row.id
+      ? { ...p, _out_of_stock: true, _last_marked_action: action } : p));
+    patchPantryRow(row.id, { out_of_stock: true, last_marked_action: action, last_marked_at: nowIso })
+      .catch(err => {
+        console.error(`Failed to mark "${itemName}" ${action}:`, err);
+        // Roll back both the Set and the row.
+        setOutOfStock(prev => {
+          const next = new Set(prev);
+          if (!wasOut) next.delete(itemName);
+          return next;
+        });
+        setPantry(prev => prev.map(p => p.id === row.id
+          ? { ...p, _out_of_stock: wasOut, _last_marked_action: priorMarked } : p));
         setItemSyncError(itemName, "Couldn't save — tap again to retry");
       });
   }, [outOfStock, findRowByItem, setItemSyncError]);
@@ -692,8 +750,15 @@ function AppInner() {
       nextDelivery={nextDelivery}
       showHelpBanner={showHelpBanner}
       setShowHelpBanner={setShowHelpBanner}
+      goToBasket={() => setTab("gaps")}
     />
     {showHelpBanner && <HelpBanner onDismiss={dismissHelpBanner}/>}
+    {!bannerDismissed && <ExpiredBanner
+      pantry={pantry}
+      outOfStock={outOfStock}
+      onMarkItem={markItemAction}
+      onDismiss={() => setBannerDismissed(true)}
+    />}
     <div className="flex flex-wrap gap-0 mb-1 border-b border-stone-200">
       {tabs.map(([k, l]) => (
         <button key={k} data-active={tab === k} onClick={() => setTab(k)} className="navtab">
@@ -709,6 +774,8 @@ function AppInner() {
       pantry={pantry}
       outOfStock={outOfStock}
       cooked={cooked}
+      addCooked={addCooked}
+      cookedSyncErrors={cookedSyncErrors}
     />}
     {tab === "recipes" && <RecipesView
       pantry={pantry}
@@ -739,6 +806,5 @@ function AppInner() {
       cooked={cooked}
       outOfStock={outOfStock}
     />}
-    <LarderFooter />
   </div>;
 }
