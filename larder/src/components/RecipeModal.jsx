@@ -12,18 +12,55 @@
 // stay reachable while the body scrolls.
 //
 // Props (mounted from AppInner, where these live):
+//   pantry           — mapped pantry rows (to decorate a deep-linked recipe)
+//   outOfStock       — Set of item names flagged out (same)
 //   cooked           — array of cooked-log rows (drives ✓ Cooked state)
 //   addCooked        — toggle callback for the footer button
 //   cookedSyncErrors — { [recipeId]: errorMessage }
-// The open recipe itself comes from useRecipeModal().
+//
+// The open recipe comes from useRecipeModal(): when a card opened the
+// modal it passed a decorated `snapshot`; when the modal was opened by
+// URL (deep link) or Back/Forward there's only a `recipeId`, so we look
+// it up in RecipesContext and decorate it here (makeability + allergen
+// flags) exactly as the list views do.
 // ============================================================
 
-import { useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AudienceTag, Bar, Chip, EaterTile } from "./primitives.jsx";
 import { useRecipeModal } from "../contexts/RecipeModalContext.jsx";
+import { useRecipes } from "../contexts/RecipesContext.jsx";
+import { useAllergens } from "../contexts/AllergensContext.jsx";
+import { makeability, pantryMatchSet } from "../lib/recipe-match.js";
+import { audienceFromFlags, flagsForRecipe } from "../lib/allergens.js";
 
-export default function RecipeModal({ cooked, addCooked, cookedSyncErrors }) {
-  const { recipe: r, closeRecipe } = useRecipeModal();
+export default function RecipeModal({ pantry, outOfStock, cooked, addCooked, cookedSyncErrors }) {
+  const { recipeId, snapshot, closeRecipe } = useRecipeModal();
+  const { recipes } = useRecipes();
+  const { allergens } = useAllergens();
+
+  // Resolve + decorate the recipe to show. Prefer the caller's snapshot;
+  // otherwise look the id up and decorate (deep link / Back-Forward path).
+  const r = useMemo(() => {
+    if (!recipeId) return null;
+    if (snapshot && snapshot.id === recipeId) return snapshot;
+    const raw = (recipes || []).find(x => x.id === recipeId);
+    if (!raw) return null;
+    const matchSet = pantryMatchSet(pantry || [], outOfStock || new Set());
+    const m = makeability(raw, matchSet);
+    const f = flagsForRecipe(raw, allergens);
+    return { ...raw, _make: m, _flags: f, _audience: raw.audience || audienceFromFlags(f) };
+  }, [recipeId, snapshot, recipes, pantry, outOfStock, allergens]);
+
+  // "Copy link" affordance — the address bar already carries ?recipe=<id>,
+  // but a one-tap copy is friendlier for sharing. Resets after a beat.
+  const [copied, setCopied] = useState(false);
+  const copyLink = () => {
+    try {
+      navigator.clipboard.writeText(window.location.href);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch { /* clipboard blocked — the URL is still in the address bar */ }
+  };
 
   // Esc-to-close + background scroll lock, only while a recipe is open.
   useEffect(() => {
@@ -81,11 +118,19 @@ export default function RecipeModal({ cooked, addCooked, cookedSyncErrors }) {
               {r.protein_per_serving_g != null && <Chip tone={r.protein_per_serving_g >= 30 ? "ok" : "neutral"}>{r.protein_per_serving_g}g protein</Chip>}
             </div>
           </div>
-          <button
-            onClick={closeRecipe}
-            aria-label="Close"
-            className="text-stone-400 hover:text-stone-800 text-2xl leading-none px-2 -mr-1 shrink-0"
-          >×</button>
+          <div className="flex items-center gap-1 shrink-0">
+            <button
+              onClick={copyLink}
+              aria-label="Copy link to this recipe"
+              title={copied ? "Link copied" : "Copy link to this recipe"}
+              className="text-stone-400 hover:text-stone-800 text-sm leading-none px-2 py-1 rounded hover:bg-stone-100"
+            >{copied ? "✓ copied" : "🔗"}</button>
+            <button
+              onClick={closeRecipe}
+              aria-label="Close"
+              className="text-stone-400 hover:text-stone-800 text-2xl leading-none px-2 -mr-1"
+            >×</button>
+          </div>
         </div>
 
         <div className="px-4 sm:px-5 py-4 space-y-4 text-sm">

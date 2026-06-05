@@ -816,6 +816,6 @@ function AppInner() {
       cooked={cooked}
       outOfStock={outOfStock}
     />}
-    <RecipeModal cooked={cooked} addCooked={addCooked} cookedSyncErrors={cookedSyncErrors} />
+    <RecipeModal pantry={pantry} outOfStock={outOfStock} cooked={cooked} addCooked={addCooked} cookedSyncErrors={cookedSyncErrors} />
   </div>;
 }
