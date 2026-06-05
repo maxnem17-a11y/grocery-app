@@ -137,7 +137,7 @@ function AppInner() {
     ["recipes", "Recipes", "Search and filter every recipe in your library. Sort by makeability, protein, or prep time."],
     ["pantry", "Pantry", "Everything currently in the kitchen, with expiry and confidence tracking. Mark items out of stock if you've used them up."],
     ["tesco", "Orders", "Past Tesco deliveries — spend trends, repeat purchases, substitutions, and Khalil allergen exposure. Read-only."],
-    ["audit", "Stats", ""],
+    ["audit", "Admin", "Two halves: Stats (read-only library + pantry metrics) and Admin (household eaters & dietary requirements, data-quality checks, page-number fixes)."],
   ];
   const currentTabMeta = tabs.find(t => t[0] === tab);
 
@@ -762,7 +762,7 @@ function AppInner() {
       onMarkItem={markItemAction}
       onDismiss={() => setBannerDismissed(true)}
     />}
-    <div className="flex flex-wrap gap-0 mb-1 border-b border-stone-200">
+    <div className="sticky top-0 z-30 bg-[#fafaf7] flex flex-wrap gap-0 mb-1 border-b border-stone-200 -mx-4 px-4 sm:-mx-6 sm:px-6 pt-2">
       {tabs.map(([k, l]) => (
         <button key={k} data-active={tab === k} onClick={() => setTab(k)} className="navtab">
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>

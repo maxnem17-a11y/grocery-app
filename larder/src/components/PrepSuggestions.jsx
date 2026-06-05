@@ -78,7 +78,7 @@ export default function PrepSuggestions({ recipes, pantry, outOfStock, initialGr
       <button className="pill" onClick={() => setReroll(r => r + 1)} title="Reshuffle the recipes">↻ Refresh</button>
     </div>
     {shown.length ? <>
-      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         {shown.map(g => (
           <div key={g.recipeId} className="card text-sm px-3 py-2.5">
             <div className="font-semibold text-stone-800 leading-tight">{g.recipeName}</div>

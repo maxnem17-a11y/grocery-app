@@ -8,9 +8,10 @@
 // else lives here.
 //
 // Layout (≥1024px): left column (~2/3) + quiet right rail (~1/3).
-//   Left:  Tonight's pick → Everybody eats (top 3, See all) → Got 5 mins?
+//   Left:  Tonight's pick → Everybody eats (top 3, See all)
 //          → Gains (collapsed) → Quick wins (collapsed) → Cooked log
-//   Rail:  Going soon (always-visible compact list of items 0–5d out)
+//   Rail:  Going soon (compact list of items 0–5d out) → Got 5 mins?
+//          (prep-ahead suggestions, moved out of the left column)
 // Below 1024px the grid collapses to a single column; DOM order is left-
 // column-first then rail (a11y: DOM order matches visual order), so the
 // rail stacks at the bottom on mobile.
@@ -195,8 +196,6 @@ export default function PlannerView({ pantry, outOfStock, cooked, addCooked, coo
         )}
       </Section>
 
-      <PrepSuggestions recipes={recipes} pantry={pantry} outOfStock={outOfStock} defaultOpen />
-
       <Section title={`Gains · ${gains.length}`} tone="info"
         subtitle="High-protein options (≥20g/serving), pescatarian-safe" collapsible defaultOpen={false}
         tip="Recipes Max can eat (no meat) with a recorded protein of at least 20g per serving — useful for training days. Sorted by protein, highest first. Recipes with no protein data are excluded.">
@@ -226,14 +225,21 @@ export default function PlannerView({ pantry, outOfStock, cooked, addCooked, coo
     </div>
   );
 
-  // Rail only renders when there's something going soon; otherwise the left
-  // column takes the full width.
-  if (goingSoon.length === 0) return leftColumn;
+  // Right column: "Going soon" rail (when there's something expiring) plus the
+  // "Got 5 mins?" prep-ahead suggestions, moved here from the left column.
+  // PrepSuggestions self-hides (returns null) when no cookable recipe has any
+  // prep_steps curated, so the column collapses to just the rail in that case.
+  const rightColumn = (
+    <div className="space-y-4">
+      {goingSoon.length > 0 && <GoingSoonRail items={goingSoon} />}
+      <PrepSuggestions recipes={recipes} pantry={pantry} outOfStock={outOfStock} defaultOpen />
+    </div>
+  );
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-5 items-start">
       <div className="lg:col-span-2">{leftColumn}</div>
-      <div><GoingSoonRail items={goingSoon} /></div>
+      <div>{rightColumn}</div>
     </div>
   );
 }

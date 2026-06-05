@@ -151,21 +151,42 @@ export default function AuditView({pantry, cooked, outOfStock}){
   }, [pantry, oosSet]);
   const totalInStock = pantry.filter(p => !oosSet.has(p.item)).length;
 
-  return <div className="space-y-5">
-    <div className="text-stone-600 text-sm border border-stone-200 rounded-lg px-4 py-3 flex flex-wrap items-baseline justify-between gap-3">
-      <div className="flex flex-wrap items-baseline gap-x-1">
-        <span title="Total recipes across all sources">{recipes.length} recipes</span>
-        <span className="text-stone-300">·</span>
-        <span title="Items currently tracked in your pantry">{pantry.length} pantry items</span>
-        <span className="text-stone-300">·</span>
-        <span title="Pantry items expiring in 5 days or fewer">{expiringCount} expiring soon</span>
-        <span className="text-stone-300">·</span>
-        <span title="Recipes you've marked cooked in this browser">{cookedCount} cooked</span>
-        <span className="text-stone-300">·</span>
-        <span title="Tesco deliveries parsed from receipt emails">{receipts.length} orders</span>
+  // ── Eaters & dietary requirements (Admin) ──
+  // Render the household_allergens config (via useAllergens, defaulted to
+  // EMPTY_ALLERGENS by the context) as one card per eater. Khalil's block list
+  // is grouped by category (blockByCategory); Max/Emily are flat block lists.
+  const CAT_LABELS = {
+    wheat: "Wheat / gluten", dairy: "Dairy", eggs: "Eggs", beef: "Beef",
+    tree_nuts: "Tree nuts", legumes: "Legumes & pulses", avocado: "Avocado",
+  };
+  const KHALIL_CAT_ORDER = ["wheat", "dairy", "eggs", "beef", "tree_nuts", "legumes", "avocado"];
+  const khalilGroups = KHALIL_CAT_ORDER
+    .filter(c => (allergens.khalil?.blockByCategory?.[c] || []).length)
+    .map(c => ({ label: CAT_LABELS[c] || c, tone: "danger", tokens: allergens.khalil.blockByCategory[c] }));
+
+  return <div className="space-y-6">
+    {/* ===== ADMIN — household config + data-quality tools ===== */}
+    <GroupHeader title="Admin" desc="Household eaters & dietary requirements, data-quality checks, and page-number fixes." />
+
+    <Section title="Eaters & dietary requirements" tone="info" collapsible defaultOpen
+      tip="Who eats in this household and what each person avoids. Sourced from the household_allergens table in Supabase — the same config that drives recipe audience tags, the Khalil-safe filters, and basket allergen flags. Edit it in Supabase to change what's flagged everywhere.">
+      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3 items-start">
+        <EaterCard name="Max" diet="Pescatarian"
+          desc="No meat or poultry — fish and seafood are fine."
+          groups={[{ label: "Avoids", tone: "danger", tokens: allergens.max?.block || [] }]} />
+        <EaterCard name="Emily" diet="No pork"
+          desc="Avoids pork and pork products."
+          groups={[{ label: "Avoids", tone: "danger", tokens: allergens.emily?.block || [] }]} />
+        <EaterCard name="Khalil (age 2)" diet="Multiple allergies"
+          desc="Strict avoidance across several categories. Peanuts are safe; tree nuts are not."
+          groups={[
+            ...khalilGroups,
+            { label: "Check label", tone: "warn", tokens: allergens.khalil?.uncertain || [] },
+            { label: "Confirmed safe", tone: "ok", tokens: allergens.khalil?.safe || [] },
+          ]} />
       </div>
-      <span className="text-xs text-stone-500 mono">{lastReceiptDate ? `last receipt: ${formatDate(lastReceiptDate)}` : "no receipts yet"}</span>
-    </div>
+    </Section>
+
     <Section title="Workflow integrity" subtitle="Health check — green means all good, amber means a small fix is needed" tone="ok" collapsible defaultOpen={false}
       tip="Each card reports on one data-quality dimension: are all recipes tagged with an audience, are all pantry items tagged with an allergen flag, etc. Status chip on each card: ✓ OK = nothing to do, ⚠ Fix needed = small repair recommended, ⚠ Critical action needed = fix before relying on this data.">
       <div className="grid sm:grid-cols-2 gap-3 text-sm">
@@ -270,6 +291,24 @@ export default function AuditView({pantry, cooked, outOfStock}){
       </>}
     </Section>
 
+    {/* ===== STATS — read-only library + pantry metrics ===== */}
+    <GroupHeader title="Stats" desc="Read-only metrics across your recipe library and pantry — nothing here changes your data." />
+
+    <div className="text-stone-600 text-sm border border-stone-200 rounded-lg px-4 py-3 flex flex-wrap items-baseline justify-between gap-3">
+      <div className="flex flex-wrap items-baseline gap-x-1">
+        <span title="Total recipes across all sources">{recipes.length} recipes</span>
+        <span className="text-stone-300">·</span>
+        <span title="Items currently tracked in your pantry">{pantry.length} pantry items</span>
+        <span className="text-stone-300">·</span>
+        <span title="Pantry items expiring in 5 days or fewer">{expiringCount} expiring soon</span>
+        <span className="text-stone-300">·</span>
+        <span title="Recipes you've marked cooked in this browser">{cookedCount} cooked</span>
+        <span className="text-stone-300">·</span>
+        <span title="Tesco deliveries parsed from receipt emails">{receipts.length} orders</span>
+      </div>
+      <span className="text-xs text-stone-500 mono">{lastReceiptDate ? `last receipt: ${formatDate(lastReceiptDate)}` : "no receipts yet"}</span>
+    </div>
+
     <Section title="Pantry composition & health"
       subtitle="By category — what's in the kitchen and which categories are at risk"
       collapsible defaultOpen={false}
@@ -345,6 +384,37 @@ export default function AuditView({pantry, cooked, outOfStock}){
         </div>
       </div>
     </Section>
+  </div>;
+}
+
+// GroupHeader — labels the two halves of the Admin tab ("Admin" and
+// "Stats"). A plain typographic divider, not a card, so it reads as a
+// section break above the cards that follow it.
+function GroupHeader({ title, desc }) {
+  return <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 pt-1 border-b border-stone-200 pb-1.5">
+    <h2 className="text-base font-semibold text-stone-800">{title}</h2>
+    {desc && <span className="text-xs text-stone-500">{desc}</span>}
+  </div>;
+}
+
+// EaterCard — one household member's dietary requirements. `groups` is a
+// list of { label, tone, tokens } blocks (e.g. Khalil's per-category
+// blocks plus "Check label" / "Confirmed safe"); empty groups are
+// skipped so a member with no entries in a group doesn't show a stray
+// header. Used only by the "Eaters & dietary requirements" Section.
+function EaterCard({ name, diet, desc, groups }) {
+  return <div className="card p-3 text-sm">
+    <div className="font-semibold text-stone-800 leading-tight">{name}</div>
+    <div className="text-xs text-teal-700 font-medium">{diet}</div>
+    <div className="text-xs text-stone-500 mb-2 leading-snug">{desc}</div>
+    {groups.filter(g => g.tokens && g.tokens.length).map(g => (
+      <div key={g.label} className="mb-2 last:mb-0">
+        <div className="text-[11px] text-stone-500 uppercase tracking-wider mb-1">{g.label} · {g.tokens.length}</div>
+        <div className="flex flex-wrap gap-1">
+          {g.tokens.map(t => <Chip key={t} tone={g.tone}>{t}</Chip>)}
+        </div>
+      </div>
+    ))}
   </div>;
 }
 
