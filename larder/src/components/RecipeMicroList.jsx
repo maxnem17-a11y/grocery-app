@@ -1,45 +1,41 @@
 // ============================================================
-// RecipeMicroList — collapsible grid of recipe cards
+// RecipeMicroList — grid of recipe cards
 // ============================================================
-// Verbatim port of canonical index.html L2341–2399.
-// EaterTile (canonical L1827–1838) was originally co-located here
-// in step 7g; promoted to a primitive in step 7i when RecipesView
-// became the second consumer.
+// Originally a verbatim port of canonical index.html L2341–2399 with a
+// click-to-expand body. Post the recipe-modal change (2026-06-05) the
+// card no longer expands in place — clicking it opens the shared
+// RecipeModal (full method + ingredients + eater safety), so every list
+// surfaces the same rich detail view. The row-level "Mark cooked" button
+// (1.8) stays on the card and stopPropagation's so it doesn't also open
+// the modal.
 //
-// Each item is a decorated recipe (`r._make`, `r._flags`,
-// `r._audience` — see PlannerView's decorated useMemo). Clicking
-// a card expands it to show in-pantry / missing ingredient lists,
-// per-eater status tiles, optional notes, and the source link/
-// citation. Only one card open at a time per list.
+// Each item is a decorated recipe (`r._make`, `r._flags`, `r._audience`
+// — see PlannerView's decorated useMemo); the modal reads those directly.
 //
-// Caller decides the items (Planner gives top-6 slices by
-// makeability / protein / quickness). The expanded card spans
-// the full row width regardless of grid breakpoint.
+// Caller decides the items (Planner gives top-6 slices by makeability /
+// protein / quickness).
 // ============================================================
 
-import { useState } from "react";
-import { AudienceTag, Chip, EaterTile } from "./primitives.jsx";
+import { AudienceTag, Chip } from "./primitives.jsx";
+import { useRecipeModal } from "../contexts/RecipeModalContext.jsx";
 
 export default function RecipeMicroList({ items, onMarkCooked, cookedSet, cookedSyncErrors }) {
-  const [expanded, setExpanded] = useState(null);
+  const { openRecipe } = useRecipeModal();
   return <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
     {items.map(r => {
       const total = (r.prep_time_mins || 0) + (r.cook_time_mins || 0);
-      const open = expanded === r.id;
       const isCooked = cookedSet ? cookedSet.has(r.id) : false;
       const cookErr = cookedSyncErrors ? cookedSyncErrors[r.id] : null;
-      const sourceLabel = r.source && r.source.type === "book"
-        ? `${r.source.title || "Book"}${r.source.page ? ` p.${r.source.page}` : ""}`
-        : (r._source_file || "");
-      return <div key={r.id} className={"card text-sm " + (open ? "sm:col-span-2 lg:col-span-3" : "")}>
+      return <div key={r.id} className="card text-sm">
         <div role="button" tabIndex={0}
-             onClick={(e) => { if (e.target.closest('button,a')) return; setExpanded(open ? null : r.id); }}
-             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setExpanded(open ? null : r.id); } }}
-             className="px-3 py-2.5 cursor-pointer select-none">
+             onClick={(e) => { if (e.target.closest('button,a')) return; openRecipe(r); }}
+             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openRecipe(r); } }}
+             className="px-3 py-2.5 cursor-pointer select-none"
+             title="Open recipe">
           <div className="font-medium leading-tight flex items-start justify-between gap-2">
             <span>{r.name}</span>
             <div className="flex items-center gap-1.5 shrink-0">
-              {/* Row-level Mark cooked (1.8) — stopPropagation so it doesn't toggle the card. */}
+              {/* Row-level Mark cooked (1.8) — stopPropagation so it doesn't open the modal. */}
               {onMarkCooked && <button
                 onClick={(e) => { e.stopPropagation(); onMarkCooked(r); }}
                 className={"rounded-md border px-2 text-[11px] font-medium leading-none " +
@@ -47,7 +43,7 @@ export default function RecipeMicroList({ items, onMarkCooked, cookedSet, cooked
                 style={{ minHeight: 36 }}
                 title={isCooked ? "Marked cooked — tap to undo" : "Mark cooked"}
               >{isCooked ? "✓ Cooked" : "Mark cooked"}</button>}
-              <span className="text-xs text-stone-400">{open ? '▲' : '▼'}</span>
+              <span className="text-xs text-stone-400" aria-hidden="true" title="Open recipe">⤢</span>
             </div>
           </div>
           {cookErr && <div className="text-[10px] text-red-600 mt-0.5">{cookErr}</div>}
@@ -61,35 +57,6 @@ export default function RecipeMicroList({ items, onMarkCooked, cookedSet, cooked
             {r._alsoNote && <Chip tone="accent">{r._alsoNote}</Chip>}
           </div>
         </div>
-        {open && <div className="px-3 pb-3 grid sm:grid-cols-2 gap-3 text-xs border-t border-stone-100 pt-3">
-          <div>
-            <div className="text-[10px] text-stone-500 uppercase tracking-wider mb-1">In pantry ({r._make.have.length})</div>
-            <ul className="space-y-0.5">
-              {r._make.have.map((i, k) => <li key={k} className="text-emerald-700">✓ {i.item}</li>)}
-              {!r._make.have.length && <li className="text-stone-400">none</li>}
-            </ul>
-          </div>
-          <div>
-            <div className="text-[10px] text-stone-500 uppercase tracking-wider mb-1">Missing ({r._make.missing.length})</div>
-            <ul className="space-y-0.5">
-              {r._make.missing.map((i, k) => <li key={k} className="text-stone-700">○ {i.item}{i.qty ? ` — ${i.qty}${i.unit || ""}` : ""}</li>)}
-              {!r._make.missing.length && <li className="text-emerald-700">fully stocked</li>}
-            </ul>
-          </div>
-          <div className="sm:col-span-2 grid sm:grid-cols-3 gap-2">
-            <EaterTile name="Khalil" status={r._flags.khalil} reasons={r._flags.khalilReason} uncertain={r._flags.khalilUncertain}/>
-            <EaterTile name="Max" status={r._flags.max} reasons={r._flags.maxReason}/>
-            <EaterTile name="Emily" status={r._flags.emily} reasons={r._flags.emilyReason}/>
-          </div>
-          {r.notes && <div className="sm:col-span-2 text-stone-600 bg-stone-50 rounded-lg px-2 py-1.5">📝 {r.notes}</div>}
-          {r.source && <div className="sm:col-span-2 text-stone-600">
-            {r.source.url
-              ? <a href={r.source.url} target="_blank" rel="noreferrer" className="text-blue-700 underline">{r.source.title || r.source.url} →</a>
-              : <>📖 {r.source.title}{r.source.page ? `, p.${r.source.page}` : ""}{r.source.author ? ` · ${r.source.author}` : ""}</>
-            }
-          </div>}
-          {sourceLabel && !r.source && <div className="sm:col-span-2 text-stone-500">{sourceLabel}</div>}
-        </div>}
       </div>;
     })}
     {!items.length && <div className="text-sm text-stone-500 col-span-full">Nothing matching right now.</div>}

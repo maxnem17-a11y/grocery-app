@@ -21,11 +21,13 @@ import OrdersView from "./components/OrdersView.jsx";
 import LarderBrand from "./components/LarderBrand.jsx";
 import ExpiredBanner from "./components/ExpiredBanner.jsx";
 import TabIcon from "./components/TabIcon.jsx";
+import RecipeModal from "./components/RecipeModal.jsx";
 import { HelpBanner } from "./components/primitives.jsx";
 import { ReceiptsProvider, useReceipts } from "./contexts/ReceiptsContext.jsx";
 import { AllergensProvider } from "./contexts/AllergensContext.jsx";
 import { RecipesProvider, useRecipes } from "./contexts/RecipesContext.jsx";
 import { TescoSkusProvider } from "./contexts/TescoSkusContext.jsx";
+import { RecipeModalProvider } from "./contexts/RecipeModalContext.jsx";
 
 // ============================================================
 // App — top-level Provider wrap + tab shell
@@ -65,7 +67,9 @@ export default function App() {
       <AllergensProvider>
         <RecipesProvider>
           <TescoSkusProvider>
-            <AppInner />
+            <RecipeModalProvider>
+              <AppInner />
+            </RecipeModalProvider>
           </TescoSkusProvider>
         </RecipesProvider>
       </AllergensProvider>
@@ -812,5 +816,6 @@ function AppInner() {
       cooked={cooked}
       outOfStock={outOfStock}
     />}
+    <RecipeModal cooked={cooked} addCooked={addCooked} cookedSyncErrors={cookedSyncErrors} />
   </div>;
 }

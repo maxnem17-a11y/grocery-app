@@ -27,8 +27,10 @@
 
 import { AudienceTag, Chip } from "./primitives.jsx";
 import { totalTime } from "../lib/recipe-match.js";
+import { useRecipeModal } from "../contexts/RecipeModalContext.jsx";
 
 export default function TonightsPick({ recipe, mode, expiringUsed = [], upNext, alsoNote, onMarkCooked, cookedSyncError }) {
+  const { openRecipe } = useRecipeModal();
   if (!recipe) return null;
   const t = totalTime(recipe);
   const title = mode === "easy" ? "Easy tonight" : "Tonight's pick";
@@ -40,7 +42,9 @@ export default function TonightsPick({ recipe, mode, expiringUsed = [], upNext, 
         {title}
       </div>
       <div className="flex items-start justify-between gap-2">
-        <h3 className="text-xl font-semibold leading-tight text-stone-900">{recipe.name}</h3>
+        <h3 onClick={() => openRecipe(recipe)}
+            className="text-xl font-semibold leading-tight text-stone-900 cursor-pointer hover:underline"
+            title="Open recipe">{recipe.name}</h3>
       </div>
 
       <div className="flex items-center gap-1.5 mt-2 flex-wrap">
@@ -76,7 +80,9 @@ export default function TonightsPick({ recipe, mode, expiringUsed = [], upNext, 
       {upNext && (
         <div className="mt-3 pt-3 border-t border-emerald-200/70 flex items-center gap-2 text-sm text-stone-600">
           <span className="text-xs text-stone-500">Up next →</span>
-          <span className="font-medium text-stone-800">{upNext.name}</span>
+          <span onClick={() => openRecipe(upNext)}
+                className="font-medium text-stone-800 cursor-pointer hover:underline"
+                title="Open recipe">{upNext.name}</span>
           <AudienceTag a={upNext._audience} />
         </div>
       )}

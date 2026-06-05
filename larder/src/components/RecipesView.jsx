@@ -37,12 +37,13 @@
 // ============================================================
 
 import { useMemo, useState } from "react";
-import { AudienceTag, Bar, Chip, EaterTile, InfoTip, Stat } from "./primitives.jsx";
+import { AudienceTag, Bar, Chip, InfoTip, Stat } from "./primitives.jsx";
 import { audienceFromFlags, flagsForRecipe } from "../lib/allergens.js";
 import { makeability, pantryMatchSet } from "../lib/recipe-match.js";
 import { lc } from "../lib/text.js";
 import { useAllergens } from "../contexts/AllergensContext.jsx";
 import { useRecipes } from "../contexts/RecipesContext.jsx";
+import { useRecipeModal } from "../contexts/RecipeModalContext.jsx";
 
 export default function RecipesView({pantry, outOfStock, cooked, addCooked, eaterFilter, setEaterFilter, cookedSyncErrors, recipeQuery, setRecipeQuery}){
   // Search query is controlled by App when provided (so the Basket tab's
@@ -53,7 +54,7 @@ export default function RecipesView({pantry, outOfStock, cooked, addCooked, eate
   const [source, setSource] = useState("all");
   const [sortBy, setSortBy] = useState("makeable");
   const [minMakeable, setMinMakeable] = useState(0);
-  const [expanded, setExpanded] = useState(null);
+  const { openRecipe } = useRecipeModal();
   // Which row's page chip is currently in edit mode. Null when nothing is being
   // edited. We allow only one row at a time — clicking another pencil moves the
   // edit focus rather than opening parallel inputs.
@@ -135,13 +136,12 @@ export default function RecipesView({pantry, outOfStock, cooked, addCooked, eate
         Min makeable {minMakeable}%
         <input type="range" min="0" max="100" step="10" value={minMakeable} onChange={e=>setMinMakeable(+e.target.value)} className="w-24"/>
       </label>
-      <InfoTip align="below-right">Search by recipe name or ingredient (e.g. type "tofu" to find every recipe using it), narrow by source/eater, sort the list, and use the slider to hide recipes you don't have enough ingredients for. Click any recipe row to see what's in your pantry vs missing, plus per-eater notes.</InfoTip>
+      <InfoTip align="below-right">Search by recipe name or ingredient (e.g. type "tofu" to find every recipe using it), narrow by source/eater, sort the list, and use the slider to hide recipes you don't have enough ingredients for. Click any recipe to open its full detail — method, ingredients (in-pantry vs missing), and per-eater safety.</InfoTip>
     </div>
 
     <div className="space-y-2">
       {filtered.map(r=>{
         const total = (r.prep_time_mins||0)+(r.cook_time_mins||0);
-        const open = expanded === r.id;
         const wasCooked = cookedSet.has(r.id);
         // Source chip format. For books we show "East · p.115" when a page
         // exists, "East" alone otherwise. Web/instagram recipes just show
@@ -198,14 +198,15 @@ export default function RecipesView({pantry, outOfStock, cooked, addCooked, eate
             </span>;
         return <div key={r.id} className="card">
           <div role="button" tabIndex={0}
-               onClick={(e)=>{ if(e.target.closest('button,a,input')) return; setExpanded(open?null:r.id); }}
-               onKeyDown={(e)=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); setExpanded(open?null:r.id);} }}
-               className="px-4 py-3 flex items-center gap-3 flex-wrap cursor-pointer select-none">
+               onClick={(e)=>{ if(e.target.closest('button,a,input')) return; openRecipe(r); }}
+               onKeyDown={(e)=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openRecipe(r);} }}
+               className="px-4 py-3 flex items-center gap-3 flex-wrap cursor-pointer select-none"
+               title="Open recipe">
             <div className="font-medium flex-1 min-w-[200px] flex items-start justify-between gap-2">
               <span>{r.name}
                 {wasCooked && <span className="ml-2 text-xs text-emerald-700">✓ cooked</span>}
               </span>
-              <span className="text-xs text-stone-400 shrink-0 sm:hidden">{open?'▲':'▼'}</span>
+              <span className="text-xs text-stone-400 shrink-0 sm:hidden" aria-hidden="true">⤢</span>
             </div>
             {chipSlot}
             <AudienceTag a={r._audience}/>
@@ -215,40 +216,12 @@ export default function RecipesView({pantry, outOfStock, cooked, addCooked, eate
               <div className="flex-1"><Bar pct={r._make.pct}/></div>
               <span className="mono text-xs">{r._make.pct}%</span>
             </div>
-            <span className="text-xs text-stone-400 hidden sm:inline">{open?'▲':'▼'}</span>
+            <span className="text-xs text-stone-400 hidden sm:inline" aria-hidden="true" title="Open recipe">⤢</span>
             <button onClick={(e)=>{ e.preventDefault(); e.stopPropagation(); addCooked(r); }} className="pill" data-active={wasCooked} title={wasCooked?"Click to un-mark as cooked":"Log that you cooked this — synced to Supabase. Click again to undo."}>
               {wasCooked ? "✓ Cooked" : "Mark cooked"}
             </button>
             {(cookedSyncErrors||{})[r.id] && <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500 -ml-1.5 self-center" title={cookedSyncErrors[r.id]}></span>}
           </div>
-          {open && <div className="px-4 pb-4 grid sm:grid-cols-2 gap-4 text-sm">
-            <div>
-              <div className="text-xs text-stone-500 uppercase tracking-wider mb-1">In pantry ({r._make.have.length})</div>
-              <ul className="space-y-0.5">
-                {r._make.have.map((i,k)=> <li key={k} className="text-emerald-700">✓ {i.item}</li>)}
-                {!r._make.have.length && <li className="text-stone-400">none</li>}
-              </ul>
-            </div>
-            <div>
-              <div className="text-xs text-stone-500 uppercase tracking-wider mb-1">Missing ({r._make.missing.length})</div>
-              <ul className="space-y-0.5">
-                {r._make.missing.map((i,k)=> <li key={k} className="text-stone-700">○ {i.item}{i.qty?` — ${i.qty}${i.unit||""}`:""}</li>)}
-                {!r._make.missing.length && <li className="text-emerald-700">fully stocked</li>}
-              </ul>
-            </div>
-            <div className="sm:col-span-2 grid sm:grid-cols-3 gap-3 pt-2 border-t border-stone-100">
-              <EaterTile name="Khalil" status={r._flags.khalil} reasons={r._flags.khalilReason} uncertain={r._flags.khalilUncertain}/>
-              <EaterTile name="Max" status={r._flags.max} reasons={r._flags.maxReason}/>
-              <EaterTile name="Emily" status={r._flags.emily} reasons={r._flags.emilyReason}/>
-            </div>
-            {r.notes && <div className="sm:col-span-2 text-xs text-stone-600 bg-stone-50 rounded-lg px-3 py-2">📝 {r.notes}</div>}
-            {r.source && <div className="sm:col-span-2 text-xs text-stone-600">
-              {r.source.url
-                ? <a href={r.source.url} target="_blank" rel="noreferrer" className="text-blue-700 underline">{r.source.title || r.source.url} →</a>
-                : <>📖 {r.source.title}{r.source.page?`, p.${r.source.page}`:""}{r.source.author?` · ${r.source.author}`:""}</>
-              }
-            </div>}
-          </div>}
         </div>;
       })}
       {!filtered.length && <div className="card px-4 py-6 text-center text-sm text-stone-500">No recipes match.</div>}
