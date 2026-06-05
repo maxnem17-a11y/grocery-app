@@ -49,7 +49,7 @@ import { makeability, pantryMatchSet, isNoiseRecipe, totalTime } from "../lib/re
 import { useAllergens } from "../contexts/AllergensContext.jsx";
 import { useRecipes } from "../contexts/RecipesContext.jsx";
 
-export default function PlannerView({ pantry, outOfStock, cooked, addCooked, cookedSyncErrors }) {
+export default function PlannerView({ pantry, outOfStock, cooked, addCooked, cookedSyncErrors, onMarkItem }) {
   const { allergens } = useAllergens();
   const { recipes, version } = useRecipes();
   const [eatAll, setEatAll] = useState(false);
@@ -231,7 +231,7 @@ export default function PlannerView({ pantry, outOfStock, cooked, addCooked, coo
   // prep_steps curated, so the column collapses to just the rail in that case.
   const rightColumn = (
     <div className="space-y-4">
-      {goingSoon.length > 0 && <GoingSoonRail items={goingSoon} />}
+      {goingSoon.length > 0 && <GoingSoonRail items={goingSoon} onMarkItem={onMarkItem} />}
       <PrepSuggestions recipes={recipes} pantry={pantry} outOfStock={outOfStock} defaultOpen />
     </div>
   );

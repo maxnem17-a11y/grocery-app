@@ -308,7 +308,14 @@ function AppInner() {
 
     if (action === "still_good") {
       const todayIso = new Date().toISOString().slice(0, 10);
-      const newExpires = addDays(todayIso, 3);
+      // Never shorten. For an expired item (banner) current expiry is in the
+      // past, so this resolves to today+3 — a 3-day grace, unchanged behaviour.
+      // For a still-fresh "Going soon" item (rail) it pushes +3 from the
+      // current expiry instead, so marking it "still good" extends it (and
+      // usually drops it out of the 0–5d rail) rather than pulling it sooner.
+      const fromToday = addDays(todayIso, 3);
+      const fromCurrent = row.expires ? addDays(row.expires, 3) : null;
+      const newExpires = (fromCurrent && fromCurrent > fromToday) ? fromCurrent : fromToday;
       const priorExpires = row.expires;
       const priorMarked = row._last_marked_action;
       // Optimistic: bump expires + record the action on the row.
@@ -783,6 +790,7 @@ function AppInner() {
       cooked={cooked}
       addCooked={addCooked}
       cookedSyncErrors={cookedSyncErrors}
+      onMarkItem={markItemAction}
     />}
     {tab === "recipes" && <RecipesView
       pantry={pantry}
