@@ -204,6 +204,12 @@ export default function PantryView({pantry, outOfStock, toggleOutOfStock, inFree
       </div>
     </div>
     <div className="card overflow-hidden">
+      {/* Horizontal scroll on narrow viewports: the 12-column table needs ~768px
+          to stay legible, so on mobile it scrolls sideways instead of crushing
+          every column into its neighbour. On desktop min-width is a floor, so the
+          grid still expands to fill the card. */}
+      <div className="overflow-x-auto">
+       <div className="min-w-[768px]">
       <div className="grid grid-cols-12 gap-2 text-xs text-stone-500 uppercase tracking-wider px-4 py-2 border-b border-stone-200 bg-stone-50">
         <SortHeader colSpan={3} sortKey="item" sortBy={sortBy} sortDir={sortDir} onClick={toggleSort}>Item</SortHeader>
         <SortHeader colSpan={1} sortKey="category" sortBy={sortBy} sortDir={sortDir} onClick={toggleSort}>Category</SortHeader>
@@ -274,6 +280,8 @@ export default function PantryView({pantry, outOfStock, toggleOutOfStock, inFree
           </div>
         ))}
         {!filtered.length && <div className="px-4 py-6 text-center text-sm text-stone-500">No items match your filter.</div>}
+      </div>
+       </div>
       </div>
     </div>
   </>;

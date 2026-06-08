@@ -758,7 +758,11 @@ function AppInner() {
     </div>;
   }
 
-  return <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-10">
+  // overflow-x-clip kills stray horizontal page scroll on mobile (e.g. an
+  // off-screen InfoTip bubble near the right edge) without making this a
+  // scroll container — so the sticky tab nav below keeps working (overflow:
+  // hidden would break sticky; clip doesn't).
+  return <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-10 overflow-x-clip">
     <LarderBrand
       pantry={pantry}
       nextDelivery={nextDelivery}
