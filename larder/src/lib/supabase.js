@@ -30,6 +30,7 @@ export const SUPABASE = {
 // — the anon key satisfies it, so no extra wiring needed in the client.
 export const INGEST_SECRET = "f07caca7c07e77ece835138a152ffa8c";
 export const INGEST_URL = `${SUPABASE.url}/functions/v1/ingest-receipt`;
+export const PARSE_PHOTO_URL = `${SUPABASE.url}/functions/v1/parse-receipt-photo`;
 
 // ============================================================
 // Read helper
@@ -131,6 +132,46 @@ export async function ingestReceipt({ retailer, eml, order, dryRun }) {
 }
 
 // ============================================================
+// Edge Function: parse-receipt-photo
+// ============================================================
+// Send a photographed paper till receipt (any UK supermarket) to the vision
+// parser. Returns an `order`-shaped object the caller previews, then saves via
+// ingestReceipt({ retailer, order }) — same write path as the PDF flow.
+//
+//   parseReceiptPhoto({ imageBase64, mediaType, retailer?, sourceFile? })
+//
+// Returns one of:
+//   { status: "parsed", retailer, order, confidence, notes }
+//   { status: "error",  code, message }   (e.g. code "vision_unconfigured"
+//                                           when ANTHROPIC_API_KEY isn't set)
+// Network failures surface as { status: "error", code: "network", message }.
+export async function parseReceiptPhoto({ imageBase64, mediaType, retailer, sourceFile }) {
+  try {
+    const res = await fetch(PARSE_PHOTO_URL, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${SUPABASE.anonKey}`,
+        "X-Ingest-Secret": INGEST_SECRET,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        image_base64: imageBase64,
+        media_type: mediaType,
+        retailer: retailer || undefined,
+        source_file: sourceFile || undefined,
+      }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok && !json.status) {
+      return { status: "error", code: "http_" + res.status, message: `HTTP ${res.status}` };
+    }
+    return json;
+  } catch (e) {
+    return { status: "error", code: "network", message: e.message || String(e) };
+  }
+}
+
+// ============================================================
 // Table-specific read helpers
 // ============================================================
 
@@ -187,6 +228,7 @@ export function mapReceiptRow(row) {
     }));
   return {
     id: row.id,
+    retailer: row.retailer,
     order_number: row.order_number,
     email_type: row.email_type,
     delivery_date: row.delivery_date,

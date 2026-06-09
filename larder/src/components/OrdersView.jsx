@@ -35,6 +35,18 @@ import SpendChart from "./SpendChart.jsx";
 import { formatDate } from "../lib/pantry-math.js";
 import { ordersKhalilFlag } from "../lib/receipt-parse.js";
 import { lookupSku } from "../lib/tesco-skus.js";
+
+// Pretty label for a retailer slug. Orders can now come from any UK shop
+// (photo receipts), not just Tesco — so each row shows where it's from.
+const RETAILER_LABELS = {
+  tesco: "Tesco", sainsburys: "Sainsbury's", waitrose: "Waitrose", ocado: "Ocado",
+  asda: "Asda", morrisons: "Morrisons", aldi: "Aldi", lidl: "Lidl",
+  coop: "Co-op", mands: "M&S", iceland: "Iceland", other: "Other",
+};
+const retailerLabel = (r) => RETAILER_LABELS[r] || (r ? r[0].toUpperCase() + r.slice(1) : null);
+// Real Tesco order numbers look like 1234-5678-90; photo receipts get a long
+// synthetic dedup key we don't want to surface in the UI.
+const isRealOrderNumber = (n) => /^\d{4}-\d{4}-\d{2,4}$/.test(n || "");
 import { useReceipts } from "../contexts/ReceiptsContext.jsx";
 import { useTescoSkus } from "../contexts/TescoSkusContext.jsx";
 
@@ -253,7 +265,8 @@ export default function OrdersView({pantry, applyReplenishment}){
                  onKeyDown={(e)=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); setExpanded(open?null:o.order_number);} }}
                  className="px-3 py-2 flex items-center gap-2 flex-wrap text-sm cursor-pointer select-none">
               <span className="mono text-xs text-stone-500 w-28 shrink-0">{formatDate(o.delivery_date)}</span>
-              <Chip title="Tesco order number">#{o.order_number}</Chip>
+              {o.retailer && <Chip tone="info" title="Where this receipt is from">{retailerLabel(o.retailer)}</Chip>}
+              {isRealOrderNumber(o.order_number) && <Chip title="Order number">#{o.order_number}</Chip>}
               {o.email_type && <Chip tone="neutral" title="Email type: receipt = post-delivery, confirmation = at-order, amendment = changed before delivery">{o.email_type}</Chip>}
               <span className="flex-1 min-w-[20px]"/>
               <Chip title="Items actually delivered">{o.purchased_count||o.item_count||0} items</Chip>

@@ -33,8 +33,8 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { Chip, KV, Section } from "./primitives.jsx";
 import { formatDate } from "../lib/pantry-math.js";
-import { ingestReceipt } from "../lib/supabase.js";
-import { detectRetailer, extractPdfText, ordersKhalilFlag, parseTesco, readEmlText } from "../lib/receipt-parse.js";
+import { ingestReceipt, parseReceiptPhoto } from "../lib/supabase.js";
+import { detectRetailer, extractPdfText, imageToDownscaledBase64, ordersKhalilFlag, parseTesco, readEmlText } from "../lib/receipt-parse.js";
 import { computeReplenishment } from "../lib/replenishment.js";
 import { useReceipts } from "../contexts/ReceiptsContext.jsx";
 import ReplenishmentPreview from "./ReplenishmentPreview.jsx";
@@ -78,6 +78,7 @@ export default function ReceiptParser({pantry, applyReplenishment}){
   const [replenishHandled, setReplenishHandled] = useState(false);
   const { refresh: refreshReceipts, localAppend: localAppendReceipt } = useReceipts();
   const inputRef = useRef(null);
+  const cameraRef = useRef(null); // mobile camera capture (photo receipts)
 
   // Replenishment bucket-up of the parsed receipt against the current
   // pantry. Recomputed whenever either side changes; null when we don't
@@ -108,6 +109,42 @@ export default function ReceiptParser({pantry, applyReplenishment}){
       const lower = file.name.toLowerCase();
       const isPdf = lower.endsWith(".pdf") || file.type === "application/pdf";
       const isEml = lower.endsWith(".eml") || file.type === "message/rfc822";
+      const isImage = (file.type || "").startsWith("image/")
+        || /\.(jpe?g|png|webp|gif|heic|heif)$/i.test(lower);
+
+      if (isImage) {
+        // Photo path: downscale on a canvas, POST the base64 to the vision
+        // parser (parse-receipt-photo), preview the returned pre-parsed order.
+        // Save POSTs that order via the same { retailer, order } path as PDFs.
+        let img;
+        try {
+          img = await imageToDownscaledBase64(file);
+        } catch (e) {
+          setStatus("error");
+          setError(e.message || "Couldn't read that image. HEIC photos may need converting to JPG first.");
+          return;
+        }
+        const result = await parseReceiptPhoto({
+          imageBase64: img.base64,
+          mediaType: img.mediaType,
+          sourceFile: file.name,
+        });
+        if (result.status !== "parsed" || !result.order) {
+          setStatus("error");
+          setError(result.code === "vision_unconfigured"
+            ? "Photo receipts need a one-time setup: add an ANTHROPIC_API_KEY secret to the Supabase project (Edge Function secrets), then try again."
+            : result.code
+              ? `${result.code}: ${result.message || "Vision parse failed."}`
+              : "Couldn't read the receipt from that photo. Try a clearer, flatter shot.");
+          return;
+        }
+        const order = result.order;
+        if (!order.source_file) order.source_file = file.name;
+        setParsed(order);
+        setInputMode("photo");
+        setStatus("done");
+        return;
+      }
 
       if (isPdf) {
         // PDF path: extract text via pdf.js, parse in the browser, preview
@@ -248,30 +285,43 @@ export default function ReceiptParser({pantry, applyReplenishment}){
     }
   };
 
-  return <Section title="Add receipt" subtitle="Parse a Tesco .eml or .pdf receipt and save to the archive"
+  return <Section title="Add receipt" subtitle="Snap a paper receipt, or add a Tesco .eml / .pdf — then save to the archive"
     collapsible defaultOpen={false}
-    tip="Drop a Tesco receipt (.eml email export or .pdf invoice) here to extract items, total, and Khalil-allergen flags. Click 'Save to archive' to persist it directly to Supabase — the order will appear in the history below immediately. The ingest endpoint dedupes by order number, so re-uploading the same receipt is safe.">
+    tip="Photograph any UK supermarket till receipt (Sainsbury's, Tesco, Waitrose…) and Claude vision reads the items, or drop a Tesco .eml/.pdf. Either way you get a preview with totals + Khalil-allergen flags, can save the order to the archive, and then restock the matching pantry items. The ingest endpoint dedupes, so re-uploading the same receipt is safe.">
 
     <div onDrop={onDrop} onDragOver={onDragOver}
          className="border-2 border-dashed border-stone-300 rounded-lg p-4 text-center bg-stone-50/50 hover:bg-stone-50 transition-colors">
       <div className="text-sm text-stone-600 mb-2">
-        Drop a <span className="mono">.eml</span> or <span className="mono">.pdf</span> here, or
+        Snap or drop a receipt — <span className="mono">.jpg</span>/<span className="mono">.png</span> photo, or a Tesco <span className="mono">.eml</span>/<span className="mono">.pdf</span>
       </div>
-      <input ref={inputRef} type="file" accept=".eml,.pdf,message/rfc822,application/pdf"
+      {/* Camera capture — mobile browsers open the rear camera directly. */}
+      <input ref={cameraRef} type="file" accept="image/*" capture="environment"
              className="hidden"
              onChange={(e) => handleFile(e.target.files?.[0])} />
-      <button onClick={() => inputRef.current?.click()}
-              className="px-3 py-1.5 text-sm rounded border border-stone-300 bg-white hover:bg-stone-100">
-        Choose file…
-      </button>
+      <input ref={inputRef} type="file" accept="image/*,.jpg,.jpeg,.png,.webp,.heic,.eml,.pdf,message/rfc822,application/pdf"
+             className="hidden"
+             onChange={(e) => handleFile(e.target.files?.[0])} />
+      <div className="flex items-center justify-center gap-2 flex-wrap">
+        <button onClick={() => cameraRef.current?.click()}
+                className="px-3 py-1.5 text-sm rounded border border-teal-700 bg-teal-700 text-white hover:bg-teal-800">
+          📷 Take photo
+        </button>
+        <button onClick={() => inputRef.current?.click()}
+                className="px-3 py-1.5 text-sm rounded border border-stone-300 bg-white hover:bg-stone-100">
+          Choose file…
+        </button>
+      </div>
       <div className="text-[11px] text-stone-500 mt-2">
-        Tesco only. .eml files are parsed server-side; .pdf is parsed in-browser (loads pdf.js ~1MB on first use).
+        Photos are read by Claude vision (any shop). Tesco .eml parses server-side; .pdf in-browser (loads pdf.js ~1MB).
       </div>
     </div>
 
     {status === "loading" && (
       <div className="mt-3 text-sm text-stone-500">
         Parsing <span className="mono">{fileName}</span>…
+        {inputMode === "photo" || /\.(jpe?g|png|webp|gif|heic|heif)$/i.test((fileName || "").toLowerCase())
+          ? <span className="text-stone-400"> reading the photo can take a few seconds.</span>
+          : null}
       </div>
     )}
 
@@ -317,7 +367,7 @@ export default function ReceiptParser({pantry, applyReplenishment}){
           </div>
         )}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-          <KV label="Date"        value={parsed.delivery_date ? formatDate(parsed.delivery_date) : "—"} sub={parsed.email_type || "tesco"}/>
+          <KV label="Date"        value={parsed.delivery_date ? formatDate(parsed.delivery_date) : "—"} sub={parsed.retailer || parsed.email_type || "tesco"}/>
           <KV label="Order #"     value={parsed.order_number || "—"}/>
           <KV label="Total"       value={parsed.total_paid_gbp != null ? `£${parsed.total_paid_gbp.toFixed(2)}` : "—"} sub={parsed.total_saved_gbp ? `saved £${parsed.total_saved_gbp.toFixed(2)}` : null}/>
           <KV label="Items"       value={`${parsed.purchased_count} delivered`} sub={parsed.unavailable_count ? `${parsed.unavailable_count} unavailable` : null}/>

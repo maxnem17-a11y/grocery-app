@@ -23,6 +23,43 @@
 // trigger one network fetch. Verbatim from canonical.
 // ============================================================
 
+// --- Photo receipt → downscaled base64 (for the vision parser) ---
+// Phone photos are 2–4MB; the Anthropic vision API recommends a long edge of
+// ~1568px and base64 inflates payloads ~33%. Downscale on a canvas to keep the
+// request small/fast/cheap and well under the size limit, re-encoding as JPEG.
+// Returns { base64, mediaType } — base64 is the bare payload (no data: prefix).
+export function imageToDownscaledBase64(file, maxEdge = 1600, quality = 0.85) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const longest = Math.max(img.naturalWidth, img.naturalHeight) || 1;
+        const scale = Math.min(1, maxEdge / longest);
+        const w = Math.max(1, Math.round(img.naturalWidth * scale));
+        const h = Math.max(1, Math.round(img.naturalHeight * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, w, h);
+        const dataUrl = canvas.toDataURL("image/jpeg", quality);
+        URL.revokeObjectURL(url);
+        const comma = dataUrl.indexOf(",");
+        resolve({ base64: dataUrl.slice(comma + 1), mediaType: "image/jpeg" });
+      } catch (e) {
+        URL.revokeObjectURL(url);
+        reject(e);
+      }
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Could not load the image — try a JPG or PNG photo."));
+    };
+    img.src = url;
+  });
+}
+
 // --- PDF.js loader (lazy, on first .pdf dropped) ---
 let __pdfjsPromise = null;
 
