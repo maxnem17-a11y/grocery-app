@@ -402,13 +402,12 @@ export async function batchPatchPantryRows(ids, fields) {
 }
 
 // PATCH a single recipe row by id. Mirrors patchPantryRow but hits the
-// `recipes` table. As of v27, public.recipes has RLS disabled, so anon
-// PATCHes succeed — this is fine for the narrow case of editing source_page
-// (the data-quality task this helper exists for), but it does mean any
-// recipe field is writeable from the page. Parked todo (since v14.10):
-// enable RLS on recipes with a narrow source_page-only update policy. When
-// that lands, callers that try to write other fields will start failing,
-// which is the correct outcome — this helper itself doesn't need to change.
+// `recipes` table. RLS is now ENABLED on public.recipes (migration
+// enable_rls_recipes_tesco_skus, 2026-06-09): anon may SELECT, and may
+// UPDATE *only* the source_page column (column-level GRANT). So this helper
+// works for the page-number edit it exists for; any attempt to PATCH another
+// recipe field returns 401 (permission denied) — the intended outcome. Insert
+// and delete from the anon key are denied entirely.
 export async function patchRecipeRow(id, fields) {
   if (!id) throw new Error("patchRecipeRow: missing id");
   return sbWrite("PATCH", `recipes?id=eq.${id}`, fields);
