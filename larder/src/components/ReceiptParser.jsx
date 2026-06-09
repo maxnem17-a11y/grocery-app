@@ -78,7 +78,8 @@ export default function ReceiptParser({pantry, applyReplenishment}){
   const [replenishHandled, setReplenishHandled] = useState(false);
   const { refresh: refreshReceipts, localAppend: localAppendReceipt } = useReceipts();
   const inputRef = useRef(null);
-  const cameraRef = useRef(null); // mobile camera capture (photo receipts)
+  const cameraRef = useRef(null); // mobile camera capture (capture="environment")
+  const photoRef = useRef(null);  // pick an existing photo from the library/files
 
   // Replenishment bucket-up of the parsed receipt against the current
   // pantry. Recomputed whenever either side changes; null when we don't
@@ -294,11 +295,17 @@ export default function ReceiptParser({pantry, applyReplenishment}){
       <div className="text-sm text-stone-600 mb-2">
         Snap or drop a receipt — <span className="mono">.jpg</span>/<span className="mono">.png</span> photo, or a Tesco <span className="mono">.eml</span>/<span className="mono">.pdf</span>
       </div>
-      {/* Camera capture — mobile browsers open the rear camera directly. */}
+      {/* Three distinct inputs so each opens the right picker:
+          - cameraRef: capture="environment" → mobile opens the rear camera
+          - photoRef:  image/* only, no capture → photo library / Files (existing photo)
+          - inputRef:  .eml/.pdf (Tesco files); also accepts images as a fallback */}
       <input ref={cameraRef} type="file" accept="image/*" capture="environment"
              className="hidden"
              onChange={(e) => handleFile(e.target.files?.[0])} />
-      <input ref={inputRef} type="file" accept="image/*,.jpg,.jpeg,.png,.webp,.heic,.eml,.pdf,message/rfc822,application/pdf"
+      <input ref={photoRef} type="file" accept="image/*"
+             className="hidden"
+             onChange={(e) => handleFile(e.target.files?.[0])} />
+      <input ref={inputRef} type="file" accept=".eml,.pdf,message/rfc822,application/pdf,image/*"
              className="hidden"
              onChange={(e) => handleFile(e.target.files?.[0])} />
       <div className="flex items-center justify-center gap-2 flex-wrap">
@@ -306,13 +313,15 @@ export default function ReceiptParser({pantry, applyReplenishment}){
                 className="px-3 py-1.5 text-sm rounded border border-teal-700 bg-teal-700 text-white hover:bg-teal-800">
           📷 Take photo
         </button>
-        <button onClick={() => inputRef.current?.click()}
-                className="px-3 py-1.5 text-sm rounded border border-stone-300 bg-white hover:bg-stone-100">
-          Choose file…
+        <button onClick={() => photoRef.current?.click()}
+                className="px-3 py-1.5 text-sm rounded border border-teal-700 bg-white text-teal-800 hover:bg-teal-50">
+          🖼️ Upload photo
         </button>
       </div>
       <div className="text-[11px] text-stone-500 mt-2">
-        Photos are read by Claude vision (any shop). Tesco .eml parses server-side; .pdf in-browser (loads pdf.js ~1MB).
+        Photos are read by Claude vision (any shop). Or upload a Tesco{" "}
+        <button onClick={() => inputRef.current?.click()}
+                className="underline hover:text-stone-700">.eml / .pdf file</button>.
       </div>
     </div>
 
