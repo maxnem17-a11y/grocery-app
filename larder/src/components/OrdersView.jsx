@@ -344,9 +344,9 @@ export default function OrdersView({pantry, applyReplenishment}){
     <Section title="Repeat-purchase patterns" subtitle={`${stats.trends.filter(t=>t.count>=2).length} items bought across 2+ orders`}
       collapsible defaultOpen={false}
       tip="Items appearing in 2+ orders, sorted by order count then by total spend. Useful for identifying reliable staples to keep on auto-add.">
-      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
-        {stats.trends.filter(t=>t.count>=2).slice(0,30).map((t,i)=> <div key={i} className="card px-2.5 py-1.5 flex items-center justify-between text-xs gap-2">
-          <span className="truncate flex-1">{t.name}</span>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
+        {stats.trends.filter(t=>t.count>=2).slice(0,30).map((t,i)=> <div key={i} className="card px-2.5 py-1.5 flex items-center justify-between text-xs gap-2 min-w-0">
+          <span className="truncate flex-1 min-w-0">{t.name}</span>
           <div className="flex items-center gap-1 shrink-0">
             {t.allergen && <Chip tone="warn" title={`Contains ${t.allergen} — Khalil cannot eat`}>{t.allergen}</Chip>}
             <Chip title="Number of orders this item appeared in">×{t.count}</Chip>
@@ -359,9 +359,9 @@ export default function OrdersView({pantry, applyReplenishment}){
     {stats.khalilExposure.length>0 && <Section title="Khalil allergen exposure" subtitle={`${stats.khalilExposure.length} distinct items containing his allergens have been ordered`} tone="warn"
       collapsible defaultOpen={false}
       tip="Items bought historically that Khalil can't eat. Not a problem in itself (these are for the adults), but useful context — anything frequently re-purchased may worth replacing with a Khalil-safe alternative.">
-      <div className="grid sm:grid-cols-2 gap-1.5 text-xs">
-        {stats.khalilExposure.slice(0,40).map((t,i)=> <div key={i} className="card px-2.5 py-1.5 flex items-center justify-between gap-2">
-          <span className="truncate flex-1">{t.name}</span>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-xs">
+        {stats.khalilExposure.slice(0,40).map((t,i)=> <div key={i} className="card px-2.5 py-1.5 flex items-center justify-between gap-2 min-w-0">
+          <span className="truncate flex-1 min-w-0">{t.name}</span>
           <div className="flex items-center gap-1 shrink-0">
             <Chip tone="warn">{t.allergen}</Chip>
             <Chip title="Number of orders">×{t.count}</Chip>
