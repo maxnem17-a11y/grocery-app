@@ -223,7 +223,11 @@ export default function AuditView({pantry, cooked, outOfStock}){
       </div>
       {missingByBook.some(b => b.missing > 0) && <>
         <div className="text-xs text-stone-500 mb-2 uppercase tracking-wider">By book — worst offenders first · click a row to add page numbers</div>
-        <div className="space-y-1">
+        {/* Horizontal scroll on narrow viewports: the 12-column table scrolls
+            sideways on mobile instead of crushing its columns together; min-width
+            is a floor so it still fills the card on desktop. */}
+        <div className="overflow-x-auto">
+        <div className="space-y-1 min-w-[560px]">
           <div className="grid grid-cols-12 gap-2 items-center text-[11px] text-stone-500 uppercase tracking-wider px-1">
             <div className="col-span-5">Book</div>
             <div className="col-span-2 text-right">Missing</div>
@@ -287,6 +291,7 @@ export default function AuditView({pantry, cooked, outOfStock}){
               </div>}
             </div>;
           })}
+        </div>
         </div>
       </>}
     </Section>

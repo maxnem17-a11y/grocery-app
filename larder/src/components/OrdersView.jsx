@@ -266,7 +266,9 @@ export default function OrdersView({pantry, applyReplenishment}){
             {open && <div className="px-3 pb-3 text-xs border-t border-stone-100 pt-2">
               {o.parse_warning && <div className="text-[11px] bg-amber-50 border border-amber-200 text-amber-800 rounded px-2 py-1 mb-2">⚠️ {o.parse_warning}</div>}
               <div className="overflow-x-auto">
-                <table className="w-full">
+                {/* min-w floor so the 7-column line-item table scrolls sideways
+                    on mobile instead of crushing every column together. */}
+                <table className="w-full min-w-[640px]">
                   <thead><tr className="text-stone-500"><th className="text-left py-1 w-8">Qty</th><th className="text-left">Item</th><th className="text-left w-24">Section</th><th className="text-right w-14">£/each</th><th className="text-right w-14">Total</th><th className="text-center w-20">Status</th><th className="text-center w-16">Khalil</th></tr></thead>
                   <tbody>{(o.items||[]).map((it,i)=> {
                     const k = ordersKhalilFlag(it.name);

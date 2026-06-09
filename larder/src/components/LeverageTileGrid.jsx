@@ -66,6 +66,12 @@ export default function LeverageTileGrid({ items, onAddToBasket, onOpenRecipe })
       </div>
     )}
     <div className="card overflow-hidden">
+      {/* Horizontal scroll on narrow viewports: the 12-column leverage table
+          needs ~640px to stay legible, so on mobile it scrolls sideways instead
+          of crushing the ingredient/recipes/boost columns together. On desktop
+          min-width is a floor, so the grid still expands to fill the card. */}
+      <div className="overflow-x-auto">
+       <div className="min-w-[640px]">
       <div className="px-3 py-2 border-b border-stone-200 bg-stone-50 text-[11px] uppercase tracking-wider text-stone-500 grid grid-cols-12 gap-2">
         <div className="col-span-1 text-right">#</div>
         <SortHeader colSpan={5} sortKey="ingredient" sortBy={sortBy} sortDir={sortDir} onClick={toggleSort}>Ingredient</SortHeader>
@@ -123,6 +129,8 @@ export default function LeverageTileGrid({ items, onAddToBasket, onOpenRecipe })
             </div>}
           </div>;
         })}
+      </div>
+       </div>
       </div>
     </div>
   </div>;
