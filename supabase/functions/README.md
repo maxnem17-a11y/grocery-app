@@ -26,13 +26,17 @@ all reuse the canonical write path.
 
 Auth: `verify_jwt=false` + the same `X-Ingest-Secret`.
 
-**Supported shops:** the vision model recognises any UK supermarket, but a
-parsed receipt can only be *saved* if its retailer is in `ingest-receipt`'s
-`ALLOWED_RETAILERS` set — currently `tesco, ocado, sainsburys, waitrose`. Other
-shops (Aldi, Lidl, M&S, Co-op, Asda, Morrisons) parse fine but fail at save with
-`unsupported_retailer`. To enable them, add the slug to `ALLOWED_RETAILERS` in
-`ingest-receipt` and redeploy — a one-line change (deliberately deferred here to
-avoid redeploying the canonical Tesco write path).
+**Supported shops:** both functions share one retailer allowlist —
+`tesco, ocado, sainsburys, waitrose, asda, morrisons, aldi, lidl, coop, mands,
+iceland, other` (`mands` = M&S, `coop` = Co-op, `other` = the vision parser's
+catch-all). The slug must be present in BOTH `parse-receipt-photo`'s and
+`ingest-receipt`'s `ALLOWED_RETAILERS` sets (kept in sync). To add another shop,
+add the slug to both and redeploy.
+
+Note: `ingest-receipt`'s source (`index.ts` + the Tesco `parse_tesco.ts` parser)
+lives in the deployed function and is not duplicated in this repo — fetch it with
+the Supabase MCP `get_edge_function` before editing, change only what you need,
+and redeploy with both files (a deploy replaces all files).
 
 **Required secret:** `ANTHROPIC_API_KEY` (an Anthropic API key, billed
 separately from any Claude subscription). Optional: `RECEIPT_VISION_MODEL`
