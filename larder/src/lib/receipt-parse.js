@@ -82,6 +82,37 @@ export function loadPdfJs() {
   return __pdfjsPromise;
 }
 
+// Render a PDF's pages to downscaled JPEG images (base64) so they can go
+// through the same Claude-vision parser the photo path uses. Replaces the
+// brittle in-browser regex parseTesco for PDF receipts: Claude reads the
+// rendered page(s) directly. Caps at maxPages to bound payload/cost.
+// Returns [{ base64, mediaType }] (base64 is bare, no data: prefix).
+export async function pdfToImageBase64s(file, { maxEdge = 1600, maxPages = 5, quality = 0.85 } = {}) {
+  const pdfjsLib = await loadPdfJs();
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  const pages = Math.min(pdf.numPages, maxPages);
+  const out = [];
+  for (let i = 1; i <= pages; i++) {
+    const page = await pdf.getPage(i);
+    const base = page.getViewport({ scale: 1 });
+    const longest = Math.max(base.width, base.height) || 1;
+    const scale = Math.min(3, maxEdge / longest); // cap upscaling at 3×
+    const viewport = page.getViewport({ scale });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(viewport.width));
+    canvas.height = Math.max(1, Math.round(viewport.height));
+    const ctx = canvas.getContext("2d");
+    // White backdrop so transparent PDFs render legibly as JPEG.
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    const dataUrl = canvas.toDataURL("image/jpeg", quality);
+    out.push({ base64: dataUrl.slice(dataUrl.indexOf(",") + 1), mediaType: "image/jpeg" });
+  }
+  return out;
+}
+
 export async function extractPdfText(file) {
   const pdfjsLib = await loadPdfJs();
   const buf = await file.arrayBuffer();
@@ -179,8 +210,10 @@ export function parseTesco(rawText) {
     }
   }
 
-  // Total paid — look for "Total" followed by £X.XX, taking the largest match
-  const totalMatches = [...text.matchAll(/(?:total\s+(?:paid|charged|cost)?|order\s+total|grand\s+total)[:\s]*£?\s*(\d+\.\d{2})/gi)];
+  // Total paid — "Total: £82.41" / "Order total £…" etc., taking the largest
+  // match. `\btotal` keeps us off "Subtotal"; the optional ":" handles the
+  // colon-no-space form Tesco's receipt PDF uses ("Total: £82.41").
+  const totalMatches = [...text.matchAll(/(?:order\s+total|grand\s+total|\btotal)\b\s*:?\s*£\s*(\d+\.\d{2})/gi)];
   if (totalMatches.length) {
     order.total_paid_gbp = Math.max(...totalMatches.map(m => parseFloat(m[1])));
   } else {
@@ -191,67 +224,81 @@ export function parseTesco(rawText) {
     }
   }
 
-  // Saved
-  const savedMatch = text.match(/(?:saved|savings|clubcard\s+price\s+savings?)[:\s]*£?\s*(\d+\.\d{2})/i);
+  // Saved — explicit "Saved/Savings £X" line if present; otherwise summed from
+  // per-item savings further down (Tesco PDFs have no single savings total).
+  const savedMatch = text.match(/(?:total\s+saved|you\s+saved|savings?|clubcard\s+price\s+savings?)[:\s]*£?\s*(\d+\.\d{2})/i);
   if (savedMatch) order.total_saved_gbp = parseFloat(savedMatch[1]);
 
-  // Items: try to find lines that look like "<qty>  <name>  £<unit>  £<total>"
-  // Tesco uses sections (Fridge, Freezer, Cupboard, Unavailable items, etc.)
+  // Items. The Tesco receipt PDF lays each purchased line out as
+  //   "<qty>  <name>  £<unit> £<total>-£<saved>"
+  // where (a) every line carries a trailing "-£<saved>", (b) unit+total are
+  // sometimes glued ("£9.75£17.54-£1.96"), and (c) long names wrap across
+  // 2–3 visual lines (name / pack-size / prices on separate lines). So we
+  // accumulate a record across lines and close it the moment a price tail
+  // appears. Parsing is gated to the items table (between the "Unit price
+  // Total Saved" column header and EOF) so page-1 summary/address/time lines
+  // can't be mis-read as items.
   const lines = text.split(/\n+/).map(l => l.trim()).filter(Boolean);
-  let currentSection = "cupboard";
-  let inUnavailable = false;
 
-  // Section headers
+  // Section headers — purchased items are grouped (Fridge / Cupboard / …).
   const sectionMap = [
-    [/^fridge\b/i,              "fridge"],
-    [/^freezer\b/i,              "freezer"],
-    [/^cupboard\b/i,             "cupboard"],
-    [/^fresh\b|^produce\b/i,    "fresh"],
-    [/^bakery\b/i,               "bakery"],
-    [/^drinks\b|^beverages\b/i, "drinks"],
-    [/^household\b|^toiletries\b/i, "household"],
-    [/unavailable/i,             "unavailable"],
+    [/^fridge\b/i,                 "fridge"],
+    [/^freezer\b/i,                "freezer"],
+    [/^frozen\b/i,                 "freezer"],
+    [/^cupboard\b/i,               "cupboard"],
+    [/^fresh\b|^produce\b/i,       "fresh"],
+    [/^bakery\b/i,                 "bakery"],
+    [/^drinks\b|^beverages\b/i,    "drinks"],
+    [/^(?:household|toiletries|health|baby)\b/i, "household"],
   ];
 
-  for (let line of lines) {
-    // Section detection — short headerish lines
-    if (line.length < 40) {
-      for (const [rgx, name] of sectionMap) {
-        if (rgx.test(line.trim())) {
-          currentSection = name;
-          inUnavailable = (name === "unavailable");
-          break;
-        }
+  // Trailing "£unit £total -£saved" block. Unit/saved optional (qty-1 lines
+  // show unit==total; some lines have no saving). Handles glued + spaced forms.
+  const PRICE_TAIL = /£\s*(\d+\.\d{2})\s*(?:£\s*(\d+\.\d{2}))?\s*(?:-\s*£\s*(\d+\.\d{2}))?\s*$/;
+  const isWasNow   = /\bwas\s+£.*\bnow\b/i;  // "Was £4.50, now £4.05" — skip
+  const isItemHead = /qty\s*product/i;        // column-header row — skip
+
+  let inItems = false;       // inside the purchased items table
+  let una = false;           // inside the "Unavailable" mini-table
+  let currentSection = "cupboard";
+  let rec = null;            // { qty, parts: [] } accumulator for one item
+
+  const closeRecord = () => {
+    if (!rec) return;
+    const blob = rec.parts.join(" ").replace(/\s+/g, " ").trim();
+    const pm = blob.match(PRICE_TAIL);
+    if (pm) {
+      const name = blob.slice(0, pm.index).trim();
+      if (/[A-Za-z]/.test(name) && !/^(total|subtotal|order|delivery|saved|clubcard)\b/i.test(name)) {
+        const unit  = parseFloat(pm[1]);
+        const total = pm[2] != null ? parseFloat(pm[2]) : unit;
+        order.items.push({
+          qty: rec.qty,
+          name,
+          unit_price_gbp:  unit,
+          total_price_gbp: total,
+          saved_gbp: pm[3] != null ? parseFloat(pm[3]) : null,
+          section: currentSection,
+          status: "purchased",
+          substituted_for: null,
+        });
       }
     }
+    rec = null;
+  };
 
-    // Item line patterns:
-    //   "2  Boursin Garlic & Herbs Soft Cheese 150g  £3.70  £7.40"
-    //   "1 x Tofoo Naked Tofu 280g £2.75"
-    //   Some PDFs collapse spaces — be flexible
-    const m = line.match(/^(\d+)\s*(?:x\s+)?(.+?)\s+£\s*(\d+\.\d{2})(?:\s+£\s*(\d+\.\d{2}))?\s*$/);
-    if (m) {
-      const qty = parseInt(m[1], 10);
-      const name = m[2].trim();
-      const p1 = parseFloat(m[3]);
-      const p2 = m[4] ? parseFloat(m[4]) : null;
-      // Sanity: name should have at least one letter, not be a section header
-      if (!/[A-Za-z]/.test(name)) continue;
-      if (/^(total|subtotal|order|delivery|saved|clubcard)\b/i.test(name)) continue;
-      order.items.push({
-        qty,
-        name,
-        unit_price_gbp:  p2 != null ? p1 : (qty ? +(p1 / qty).toFixed(2) : p1),
-        total_price_gbp: p2 != null ? p2 : p1,
-        saved_gbp: null,
-        section: inUnavailable ? "unavailable" : currentSection,
-        status: inUnavailable ? "unavailable" : "purchased",
-        substituted_for: null,
-      });
-    } else if (inUnavailable) {
-      // Unavailable items often have no price line; capture as "1 X NAME"
-      const um = line.match(/^(\d+)\s*(?:x\s+)?([A-Za-z].{3,})$/);
-      if (um) {
+  for (const line of lines) {
+    // "Unavailable" mini-table opens at a standalone "Unavailable" header and
+    // closes when the purchased table's column header arrives. (Avoids the
+    // page-1 "0 substitution and 1 items unavailable" summary line.)
+    if (/^unavailable$/i.test(line)) { una = true; continue; }
+    if (!inItems && /unit\s*price/i.test(line) && /\btotal\b/i.test(line)) {
+      inItems = true; una = false; continue;
+    }
+
+    if (una) {
+      const um = line.match(/^(\d+)\s+(.+?)\s+unavailable\s*$/i);
+      if (um && parseInt(um[1], 10) >= 1) {
         order.items.push({
           qty: parseInt(um[1], 10),
           name: um[2].trim(),
@@ -263,7 +310,40 @@ export function parseTesco(rawText) {
           substituted_for: null,
         });
       }
+      continue;
     }
+
+    if (!inItems) continue;
+    if (isWasNow.test(line) || isItemHead.test(line)) continue;
+
+    // Section header (short standalone line).
+    if (line.length < 40) {
+      let matched = false;
+      for (const [rgx, name] of sectionMap) {
+        if (rgx.test(line)) { closeRecord(); currentSection = name; matched = true; break; }
+      }
+      if (matched) continue;
+    }
+
+    // A new item starts with "<qty> <letter|£>"; anything else is a wrapped
+    // continuation of the open record (pack size, name overflow, price line).
+    const startM = line.match(/^(\d+)\s+(\S.*)$/);
+    if (startM && /^[A-Za-z£]/.test(startM[2])) {
+      closeRecord();
+      rec = { qty: parseInt(startM[1], 10), parts: [startM[2]] };
+    } else if (rec) {
+      rec.parts.push(line);
+    } else {
+      continue;
+    }
+    if (rec && PRICE_TAIL.test(rec.parts.join(" "))) closeRecord();
+  }
+  closeRecord();
+
+  // Per-item savings sum (when no explicit savings line was found above).
+  if (order.total_saved_gbp == null) {
+    const savedSum = order.items.reduce((s, i) => s + (i.saved_gbp || 0), 0);
+    if (savedSum > 0) order.total_saved_gbp = +savedSum.toFixed(2);
   }
 
   // Counts
